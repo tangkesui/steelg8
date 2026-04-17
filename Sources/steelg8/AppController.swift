@@ -94,6 +94,12 @@ final class AppController: ObservableObject {
         }
     }
 
+    @objc func openSettingsWindow() {
+        NSApp.activate(ignoringOtherApps: true)
+        // macOS 14+ 的标准选择器；SwiftUI Settings scene 监听此 action
+        NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+    }
+
     @objc func quitApp() {
         pythonRuntime.stop()
         NSApplication.shared.terminate(nil)
@@ -143,6 +149,14 @@ final class AppController: ObservableObject {
         menu.addItem(openSoulItem)
 
         menu.addItem(.separator())
+
+        let settingsItem = NSMenuItem(
+            title: "设置…",
+            action: #selector(openSettingsWindow),
+            keyEquivalent: ","
+        )
+        settingsItem.target = self
+        menu.addItem(settingsItem)
 
         let showWindowItem = NSMenuItem(title: "打开主窗口", action: #selector(showMainWindow), keyEquivalent: "")
         showWindowItem.target = self

@@ -52,11 +52,29 @@ USER_PROVIDERS_PATH = Path(
 class Provider:
     name: str
     base_url: str
-    api_key_env: str
+    api_key_env: str = ""
+    api_key_inline: str = ""
     models: list[str] = field(default_factory=list)
 
     def api_key(self) -> str:
-        return os.environ.get(self.api_key_env, "").strip()
+        """优先使用 JSON 中直写的 api_key；否则读环境变量。
+
+        这样 Settings UI 写入 ~/.steelg8/providers.json 的 key 能立刻生效，
+        同时保留 env-var 路径给不想把 key 落盘的高阶用户。
+        """
+        if self.api_key_inline:
+            return self.api_key_inline.strip()
+        if self.api_key_env:
+            return os.environ.get(self.api_key_env, "").strip()
+        return ""
+
+    def api_key_source(self) -> str:
+        """给 /providers 端点用，说明 key 的来源（不泄露 key 本身）。"""
+        if self.api_key_inline:
+            return "inline"
+        if self.api_key_env and os.environ.get(self.api_key_env, ""):
+            return f"env:{self.api_key_env}"
+        return "missing"
 
     def is_ready(self) -> bool:
         return bool(self.base_url) and bool(self.api_key())
@@ -114,6 +132,7 @@ class ProviderRegistry:
                 "baseUrl": provider.base_url,
                 "ready": provider.is_ready(),
                 "apiKeyEnv": provider.api_key_env,
+                "apiKeySource": provider.api_key_source(),
                 "models": list(provider.models),
             }
             for provider in self.providers.values()
@@ -132,6 +151,7 @@ def _load_providers_from_json(path: Path) -> ProviderRegistry:
             name=name,
             base_url=base_url,
             api_key_env=str(cfg.get("api_key_env", "")),
+            api_key_inline=str(cfg.get("api_key", "")),
             models=[str(m) for m in cfg.get("models", [])],
         )
     return ProviderRegistry(

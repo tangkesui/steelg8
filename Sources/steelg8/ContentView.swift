@@ -5,9 +5,14 @@ struct ContentView: View {
 
     var body: some View {
         TabView {
+            ChatWebView()
+                .tabItem {
+                    Label("对话", systemImage: "bubble.left.and.bubble.right")
+                }
+
             WorkbenchView()
                 .tabItem {
-                    Label("工作台", systemImage: "sparkles.rectangle.stack")
+                    Label("状态", systemImage: "sparkles.rectangle.stack")
                 }
 
             OCRView()
@@ -95,10 +100,10 @@ private struct WorkbenchView: View {
 
                 GroupBox("下一步") {
                     VStack(alignment: .leading, spacing: 10) {
-                        Text("1. 接入真 provider：复制 config/providers.example.json 到 ~/.steelg8/providers.json，然后在 shell 里 export KIMI_API_KEY / DEEPSEEK_API_KEY / QWEN_API_KEY / OPENROUTER_API_KEY 任意一家。")
-                        Text("2. 启动后通过 GET /providers 查看就绪状态，对话时传 model 字段路由到对应 provider。")
-                        Text("3. Phase 1：用 WKWebView 接入 Chat / Scratch / Canvas。")
-                        Text("4. Phase 2：接项目记忆 + Office docx/xlsx/pptx 模板填充。")
+                        Text("1. 配真 provider：菜单栏「设置…」(⌘,) 里填 API Key；或者 export KIMI_API_KEY / DEEPSEEK_API_KEY / QWEN_API_KEY / OPENROUTER_API_KEY。")
+                        Text("2. 切到「对话」Tab，右上角选模型或「自动路由」，⌘+Enter 发送。")
+                        Text("3. Phase 2：项目记忆 + 云端 Embedding + Office docx/xlsx/pptx 模板填充。")
+                        Text("4. Phase 2 后期：Scratch 捕获台 + Canvas 多视图。")
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }

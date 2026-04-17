@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>steelg8 · Chat</title>
+<link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+<div id="app">
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo">⚒</span>
+      <span class="name">steelg8</span>
+      <span class="slogan">让文案工作者不用再求任何人</span>
+    </div>
+    <div class="controls">
+      <label class="model-label">
+        <span>模型</span>
+        <select id="model-picker">
+          <option value="">自动路由</option>
+        </select>
+      </label>
+      <button id="reload-providers" title="刷新 provider 列表">↻</button>
+      <div id="health-dot" class="dot dot-off" title="内核状态"></div>
+    </div>
+  </header>
+
+  <main id="messages" class="messages">
+    <div class="welcome">
+      <h2>欢迎回来</h2>
+      <p>有什么要让我干的？直接说。</p>
+      <div class="hints">
+        <button data-prompt="帮我写一段产品发布的推文，100 字左右">产品推文</button>
+        <button data-prompt="把下面这段中文翻译成英文：\n\n我们的目标是把文案工作者从模型厂商手里解放出来。">翻译任务</button>
+        <button data-prompt="steelg8 系统现在跑到哪一阶段了？简要说说。">状态询问</button>
+      </div>
+    </div>
+  </main>
+
+  <footer class="composer">
+    <div class="status-bar">
+      <span id="routing-hint" class="routing-hint"></span>
+      <span id="error-hint" class="error-hint"></span>
+    </div>
+    <div class="input-row">
+      <textarea id="input" rows="2" placeholder="输入消息，⌘/Ctrl + Enter 发送"></textarea>
+      <button id="send" class="send-btn">发送</button>
+    </div>
+  </footer>
+</div>
+
+<script src="markdown.js"></script>
+<script src="chat.js"></script>
+</body>
+</html>

@@ -1,15 +1,18 @@
 #!/usr/bin/env python3
 """
-steelg8 Phase 0 · 本地最小内核
+steelg8 Phase 0.5 · 本地最小内核
 
 职责：
 - 维护 soul.md（人格底座，L1 记忆层）
-- 暴露 HTTP 接口：/health /chat /providers
-- 通过 provider registry 把 /chat 请求路由到 Kimi / DeepSeek / Qwen / OpenRouter
-- 无任何第三方依赖，stdlib only（为了安装门槛）
+- 暴露 HTTP 接口：/health /chat /chat/stream /providers /providers/reload
+- 把 /chat 请求交给 router.route() 做四层漏斗决策，再由 agent.run_* 跑
+- 无任何第三方依赖，stdlib only
 
-后续（Phase 1+）会换成 Fork 自 Hermes 的完整 agent loop，届时本文件会降级为"冷启动
-引导器"，业务逻辑迁移到独立的 agent 模块。
+相对 Phase 0 的变化：
+- 引入 router.py（四层漏斗 MVP 版）
+- 引入 agent.py（最小 agent loop + 流式）
+- 新增 /chat/stream：SSE，用于 WebView 流式渲染
+- /chat 的返回结构里加 routingLayer / routingReason 方便前端 UI 显示
 """
 
 from __future__ import annotations
@@ -21,13 +24,13 @@ import sys
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any
-from urllib import request
+from typing import Any, Iterator
 
-# 把自身目录加入 sys.path，方便作为脚本直接运行
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from providers import load_registry, Provider, ProviderRegistry  # noqa: E402
+import router  # noqa: E402
+import agent  # noqa: E402
 
 
 def app_root() -> Path:
@@ -71,166 +74,68 @@ def build_system_prompt(soul_text: str) -> str:
     return "\n\n".join(
         [
             soul_text.strip(),
-            "你是 steelg8 的本地最小内核。回答直接，优先确认链路是否打通，再给一句像样的启动反馈。",
+            "你是 steelg8 的本地内核。回答直接，根据当前请求挑合适的详略，必要时先确认链路打通。",
         ]
     ).strip()
 
 
 @dataclass
-class ChatResult:
-    content: str
-    model: str
-    source: str
-    soul_summary: str
+class ChatRequest:
+    message: str
+    model: str | None
+    history: list[dict[str, Any]]
+    stream: bool
 
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "content": self.content,
-            "model": self.model,
-            "source": self.source,
-            "soulSummary": self.soul_summary,
-        }
-
-
-def _call_provider(
-    provider: Provider,
-    model: str,
-    message: str,
-    soul_text: str,
-) -> ChatResult:
-    payload = {
-        "model": model or (provider.models[0] if provider.models else ""),
-        "messages": [
-            {"role": "system", "content": build_system_prompt(soul_text)},
-            {"role": "user", "content": message},
-        ],
-        "temperature": 0.4,
-    }
-
-    req = request.Request(
-        f"{provider.base_url}/chat/completions",
-        data=json.dumps(payload).encode("utf-8"),
-        headers={
-            "Authorization": f"Bearer {provider.api_key()}",
-            "Content-Type": "application/json",
-        },
-        method="POST",
-    )
-
-    with request.urlopen(req, timeout=30) as resp:
-        body = json.loads(resp.read().decode("utf-8"))
-
-    content = body["choices"][0]["message"]["content"].strip()
-    resolved_model = body.get("model") or payload["model"]
-
-    return ChatResult(
-        content=content or "上游模型返回了空响应。",
-        model=resolved_model,
-        source=f"provider:{provider.name}",
-        soul_summary=soul_summary(soul_text),
-    )
-
-
-def mock_reply(
-    message: str,
-    model: str | None,
-    soul_text: str,
-    *,
-    error_note: str | None = None,
-    reason: str | None = None,
-) -> ChatResult:
-    summary = soul_summary(soul_text)
-    pieces = [
-        "steelg8 Phase 0 已接通。",
-        f"本地内核收到了：{message}",
-        f"当前人格底色：{summary}",
-    ]
-    if reason:
-        pieces.append(f"触发 mock 的原因：{reason}。")
-    if error_note:
-        pieces.append(f"上游调用失败，已自动降级：{error_note}")
-    pieces.append(
-        "把 ~/.steelg8/providers.json 配好任意一家真 provider（Kimi/Qwen/DeepSeek/OpenRouter），就能切到真模型。"
-    )
-
-    return ChatResult(
-        content=" ".join(pieces),
-        model=model or "mock-local",
-        source="mock-fallback",
-        soul_summary=summary,
-    )
-
-
-def handle_chat(
-    message: str,
-    requested_model: str | None,
-    registry: ProviderRegistry,
-) -> ChatResult:
-    soul_text = ensure_soul_file()
-
-    # 1. 指定了 model：按 model 找 provider
-    if requested_model:
-        resolved = registry.resolve(requested_model)
-        if resolved:
-            provider, model = resolved
-            try:
-                return _call_provider(provider, model, message, soul_text)
-            except Exception as exc:  # noqa: BLE001
-                return mock_reply(
-                    message,
-                    requested_model,
-                    soul_text,
-                    error_note=str(exc),
-                )
-        # 指定模型但未命中任何 provider → 尝试默认
-        return mock_reply(
-            message,
-            requested_model,
-            soul_text,
-            reason=f"provider registry 没有 '{requested_model}' 对应的 provider 或 provider 未就绪",
+    @classmethod
+    def parse(cls, body: Any, *, stream_endpoint: bool) -> "ChatRequest | None":
+        if not isinstance(body, dict):
+            return None
+        message = str(body.get("message", "")).strip()
+        if not message:
+            return None
+        model = body.get("model") or None
+        history = body.get("history") or []
+        if not isinstance(history, list):
+            history = []
+        return cls(
+            message=message,
+            model=model,
+            history=history,
+            stream=bool(body.get("stream")) or stream_endpoint,
         )
 
-    # 2. 没指定 model：用 default_model
-    if registry.default_model:
-        resolved = registry.resolve(registry.default_model)
-        if resolved:
-            provider, model = resolved
-            try:
-                return _call_provider(provider, model, message, soul_text)
-            except Exception as exc:  # noqa: BLE001
-                return mock_reply(
-                    message,
-                    registry.default_model,
-                    soul_text,
-                    error_note=str(exc),
-                )
 
-    # 3. 默认也不可用：找第一个 ready 的 provider 兜底
-    ready = registry.first_ready()
-    if ready:
-        provider, model = ready
-        try:
-            return _call_provider(provider, model, message, soul_text)
-        except Exception as exc:  # noqa: BLE001
-            return mock_reply(
-                message,
-                model,
-                soul_text,
-                error_note=str(exc),
-            )
+def _context_from_request(req: ChatRequest, soul_text: str) -> agent.AgentContext:
+    msgs: list[agent.ChatMessage] = []
+    for entry in req.history:
+        if not isinstance(entry, dict):
+            continue
+        role = str(entry.get("role", "")).strip()
+        content = str(entry.get("content", "")).strip()
+        if role in {"user", "assistant", "system", "tool"} and content:
+            msgs.append(agent.ChatMessage(role=role, content=content))
 
-    # 4. 全部未就绪：mock
-    return mock_reply(
-        message,
-        None,
-        soul_text,
-        reason="没有任何 provider 处于就绪状态（base_url + api_key 缺失）",
+    return agent.AgentContext(
+        system_prompt=build_system_prompt(soul_text),
+        history=msgs,
     )
 
 
 class SteelG8Handler(BaseHTTPRequestHandler):
-    server_version = "steelg8/0.1"
+    server_version = "steelg8/0.2"
     registry: ProviderRegistry  # 由 main 注入
+
+    # --- CORS 永久开启：本地内核只绑 127.0.0.1，允许 file:// / localhost
+    # 所有源调用是工程必需（WKWebView 加载 file://、浏览器调试）
+    def end_headers(self) -> None:
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization, Accept")
+        super().end_headers()
+
+    def do_OPTIONS(self) -> None:  # noqa: N802
+        self.send_response(204)
+        self.end_headers()
 
     def do_GET(self) -> None:  # noqa: N802
         if self.path == "/health":
@@ -259,27 +164,120 @@ class SteelG8Handler(BaseHTTPRequestHandler):
             )
             return
 
+        if self.path == "/capabilities":
+            # 画像表快照，前端可用来展示模型能力
+            import capabilities as caps
+            self.respond(
+                200,
+                {
+                    "profiles": [
+                        {
+                            "model": p.model,
+                            "provider": p.provider,
+                            "chineseWriting": p.chinese_writing,
+                            "englishWriting": p.english_writing,
+                            "reasoning": p.reasoning,
+                            "contextTokens": p.context_tokens,
+                            "costTier": p.cost_tier,
+                            "latencyTier": p.latency_tier,
+                            "toolUse": p.tool_use,
+                            "tags": list(p.tags),
+                        }
+                        for p in caps.all_profiles()
+                    ]
+                },
+            )
+            return
+
         self.respond(404, {"error": "not found"})
 
     def do_POST(self) -> None:  # noqa: N802
-        if self.path != "/chat":
-            self.respond(404, {"error": "not found"})
+        if self.path == "/providers/reload":
+            self._handle_reload()
             return
 
+        if self.path == "/chat":
+            self._handle_chat(stream=False)
+            return
+
+        if self.path == "/chat/stream":
+            self._handle_chat(stream=True)
+            return
+
+        self.respond(404, {"error": "not found"})
+
+    # ------------------- handlers -------------------
+
+    def _handle_reload(self) -> None:
+        new_registry = load_registry(example_candidates=(EXAMPLE_PROVIDERS_PATH,))
+        if os.environ.get("STEELG8_DEFAULT_MODEL"):
+            new_registry.default_model = os.environ["STEELG8_DEFAULT_MODEL"]
+        type(self).registry = new_registry
+        self.respond(
+            200,
+            {
+                "ok": True,
+                "source": new_registry.source,
+                "defaultModel": new_registry.default_model,
+                "providers": new_registry.readiness_summary(),
+                "readyProviders": [
+                    p.name for p in new_registry.providers.values() if p.is_ready()
+                ],
+            },
+        )
+
+    def _handle_chat(self, *, stream: bool) -> None:
         body = self.read_json()
-        if not isinstance(body, dict):
-            self.respond(400, {"error": "invalid json"})
-            return
-
-        message = str(body.get("message", "")).strip()
-        requested_model = body.get("model")
-
-        if not message:
+        req = ChatRequest.parse(body, stream_endpoint=stream)
+        if req is None:
             self.respond(400, {"error": "message is required"})
             return
 
-        result = handle_chat(message, requested_model, self.registry)
-        self.respond(200, result.to_dict())
+        soul_text = ensure_soul_file()
+        context = _context_from_request(req, soul_text)
+
+        decision = router.route(req.message, self.registry, explicit_model=req.model)
+        provider: Provider | None = self.registry.providers.get(decision.provider) if decision.provider else None
+
+        if stream:
+            self._stream_response(req.message, context, provider, decision)
+        else:
+            result = agent.run_once(req.message, context, provider, decision)
+            payload = result.to_dict()
+            payload["soulSummary"] = soul_summary(soul_text)
+            self.respond(200, payload)
+
+    def _stream_response(
+        self,
+        message: str,
+        context: agent.AgentContext,
+        provider: Provider | None,
+        decision: router.RoutingDecision,
+    ) -> None:
+        # SSE 头
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Connection", "keep-alive")
+        self.send_header("X-Accel-Buffering", "no")
+        self.end_headers()
+
+        def write_event(event: dict[str, Any]) -> None:
+            line = f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+            try:
+                self.wfile.write(line.encode("utf-8"))
+                self.wfile.flush()
+            except (BrokenPipeError, ConnectionResetError):
+                raise
+
+        try:
+            for event in agent.run_stream(message, context, provider, decision):
+                write_event(event)
+        except (BrokenPipeError, ConnectionResetError):
+            # 客户端断开，不是错误
+            return
+
+    # ------------------- io utilities -------------------
 
     def read_json(self) -> Any:
         raw_length = self.headers.get("Content-Length", "0")
@@ -287,7 +285,10 @@ class SteelG8Handler(BaseHTTPRequestHandler):
         raw = self.rfile.read(length) if length else b""
         if not raw:
             return {}
-        return json.loads(raw.decode("utf-8"))
+        try:
+            return json.loads(raw.decode("utf-8"))
+        except json.JSONDecodeError:
+            return None
 
     def respond(self, status: int, payload: dict[str, Any]) -> None:
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -307,7 +308,7 @@ class SteelG8Handler(BaseHTTPRequestHandler):
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="steelg8 Phase 0 local server")
+    parser = argparse.ArgumentParser(description="steelg8 Phase 0.5 local server")
     parser.add_argument("--port", type=int, default=int(os.environ.get("STEELG8_PORT", "8765")))
     args = parser.parse_args()
 

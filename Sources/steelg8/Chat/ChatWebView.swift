@@ -1,0 +1,90 @@
+import AppKit
+import SwiftUI
+import WebKit
+
+/// WKWebView 承载 Web/chat/index.html。Phase 1 的主交互窗口。
+///
+/// 策略：
+/// - 本地 file:// 协议加载，WKWebView 允许访问到整个 Web/chat 目录（loadFileURL(allowingReadAccessTo:)）
+/// - 不注入 JS，chat.js 自己去 http://127.0.0.1:8765 拉后端
+/// - 开发阶段允许 web inspector；release 再关
+struct ChatWebView: NSViewRepresentable {
+
+    func makeNSView(context: Context) -> WKWebView {
+        let config = WKWebViewConfiguration()
+        let prefs = WKWebpagePreferences()
+        prefs.allowsContentJavaScript = true
+        config.defaultWebpagePreferences = prefs
+
+        // 允许 file:// 访问本地其他文件、跨源读 127.0.0.1（本地内核）
+        // 这些都是 WKWebView 未公开的 KVC key，在 macOS 14+ 仍可用
+        config.setValue(true, forKey: "allowUniversalAccessFromFileURLs")
+        config.preferences.setValue(true, forKey: "allowFileAccessFromFileURLs")
+        config.preferences.setValue(true, forKey: "developerExtrasEnabled")
+
+        let webView = WKWebView(frame: .zero, configuration: config)
+        webView.setValue(false, forKey: "drawsBackground") // 让 SwiftUI 的背景色透出来
+        webView.allowsLinkPreview = false
+        webView.allowsBackForwardNavigationGestures = false
+
+        if #available(macOS 13.3, *) {
+            webView.isInspectable = true
+        }
+
+        loadChatPage(into: webView)
+        return webView
+    }
+
+    func updateNSView(_ nsView: WKWebView, context: Context) {
+        // 外部状态变化时不重载，chat.js 自己拉后端
+    }
+
+    // MARK: - helpers
+
+    private func loadChatPage(into webView: WKWebView) {
+        guard let indexURL = locateIndexHTML() else {
+            let fallback = """
+            <html><body style='font-family:-apple-system,sans-serif;padding:40px;color:#999'>
+            <h3>找不到 Web/chat/index.html</h3>
+            <p>请确保项目根目录下存在 <code>Web/chat/</code> 资源。</p>
+            </body></html>
+            """
+            webView.loadHTMLString(fallback, baseURL: nil)
+            return
+        }
+
+        let directory = indexURL.deletingLastPathComponent()
+        webView.loadFileURL(indexURL, allowingReadAccessTo: directory)
+    }
+
+    /// 按多路径查找 Web/chat/index.html：
+    /// 1) 开发阶段：仓库根 Web/chat/index.html
+    /// 2) 打包成 .app 后：Resources/Web/chat/index.html
+    private func locateIndexHTML() -> URL? {
+        var candidates: [URL] = []
+        if let dev = sourceTreeRoot() {
+            candidates.append(dev.appendingPathComponent("Web/chat/index.html"))
+        }
+        if let bundled = Bundle.main.url(
+            forResource: "index",
+            withExtension: "html",
+            subdirectory: "Web/chat"
+        ) {
+            candidates.append(bundled)
+        }
+        for url in candidates where FileManager.default.fileExists(atPath: url.path) {
+            return url
+        }
+        return nil
+    }
+
+    /// 推出仓库根目录：编译单元 → Sources/steelg8/Chat/ 回退四层
+    private func sourceTreeRoot() -> URL? {
+        var url = URL(fileURLWithPath: #filePath)
+        url.deleteLastPathComponent() // Chat/
+        url.deleteLastPathComponent() // steelg8/
+        url.deleteLastPathComponent() // Sources/
+        url.deleteLastPathComponent() // repo root
+        return url
+    }
+}

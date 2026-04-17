@@ -34,25 +34,29 @@ steelg8 是一个跑在自己 Mac 上的个人 AI 助手。它常驻菜单栏，
 
 更详细的设计可以翻上层目录里的 `steelg8-产品设计方案-v0.1.md`（仓库暂不公开，后续可能裁剪后发布）。
 
-## 当前功能（Phase 0）
+## 当前功能（Phase 0 → 1 过渡）
 
 - [x] Swift 菜单栏壳子，含 About / Preferences / Quit
 - [x] 全局热键框架（HotkeyRegistry）
 - [x] Python 子进程由 Swift 拉起、退出时自动回收
-- [x] `/health` 端点：返回模式、默认模型、Provider 来源、soul.md 摘要
-- [x] `/providers` 端点：列出所有已注册 Provider 的就绪状态
-- [x] `/chat` 端点：按模型 → 默认模型 → 第一个就绪 Provider → mock 四级回退
-- [x] 多 Provider 注册表，从 `~/.steelg8/providers.json` / 环境变量 / example 三级加载
-- [ ] SwiftUI Settings 窗口（Phase 1 规划）
-- [ ] 记忆层 soul.md / user.md / project.md 写回（Phase 1）
-- [ ] Qdrant + 云 Embedding（Phase 2）
+- [x] `/health` `/providers` `/capabilities` 端点
+- [x] `/chat`（非流式）+ `/chat/stream`（SSE 流式）双端点
+- [x] **四层路由漏斗**（规则 → Embedding stub → 廉价云 → 高能模型 → mock）
+- [x] **模型能力画像表** (`Python/capabilities.py`)
+- [x] **轻量 agent loop**（消息历史 + 流式 yield + mock 降级）
+- [x] 多 Provider 注册表（`~/.steelg8/providers.json` / 环境变量 / example 三级加载）
+- [x] **SwiftUI Settings 窗口**（Provider 管理 + 默认模型，⌘, 打开）
+- [x] **WKWebView 对话主窗**：React-free 原生 HTML + 流式 SSE + 自写 Markdown 渲染
+- [ ] 记忆层 L2 user.md / L3 project steelg8.md（Phase 2）
+- [ ] Qdrant + 云 Embedding + Office 模板填充（Phase 2）
+- [ ] Canvas / Scratch 多工位（Phase 2 后期）
 
 ## 快速开始
 
 ### 0. 前置条件
 
 - macOS 14+（Sonoma 以上）
-- Xcode Command Line Tools（`xcode-select --install`）
+- **完整的 Xcode**（不能只是 Command Line Tools —— 某些 macOS 版本上 CLT 的 Swift 会和系统 SDK 版本对不齐，建议直接装 Xcode）
 - Python 3.10+（系统自带即可）
 - 至少一家模型厂商的 API Key（推荐 DeepSeek，国内访问稳定、便宜）
 
@@ -105,7 +109,12 @@ swift build
 ./bundle.sh   # 打包 .app 并 symlink 到 /Applications
 ```
 
-然后从 Launchpad 或 `/Applications/steelg8.app` 启动，菜单栏会出现图标。
+然后从 Launchpad 或 `/Applications/steelg8.app` 启动：
+
+1. 菜单栏会出现 🔨 图标，点开看到「内核状态 / 最近回复 / 测试 Agent 链路 / 设置…」
+2. 主窗口默认打开 **对话** Tab（WKWebView 加载 `Web/chat/`）
+3. 右上角下拉选模型或「自动路由」；输入框 `⌘+Enter` 发送
+4. 没填 API Key 时会走 mock 回退，能看到路由层级；填好 key 后流式真回复
 
 ## 目录结构
 
@@ -115,13 +124,24 @@ steelg8/
 ├── Sources/steelg8/           macOS 外壳（SwiftUI + AppKit）
 │   ├── App.swift              入口
 │   ├── AppController.swift    菜单栏 / 热键 / Python runtime 总控
-│   ├── ContentView.swift      状态面板
+│   ├── ContentView.swift      Tab 容器（对话 / 状态 / OCR）
 │   ├── AgentBridge/           Swift ↔ Python IPC
+│   ├── Chat/                  WKWebView 对话宿主
 │   ├── Hotkeys/               全局热键注册
+│   ├── OCR/                   截图 OCR
+│   ├── Settings/              Provider 配置 UI
 │   └── Shared/                工具类
 ├── Python/
 │   ├── server.py              HTTP kernel（stdlib-only）
-│   └── providers.py           多 Provider 注册表
+│   ├── providers.py           多 Provider 注册表
+│   ├── capabilities.py        模型能力画像表
+│   ├── router.py              四层路由漏斗
+│   └── agent.py               轻量 agent loop（含流式）
+├── Web/chat/                  WKWebView 加载的前端
+│   ├── index.html
+│   ├── styles.css
+│   ├── markdown.js            自写极简 Markdown 渲染
+│   └── chat.js                SSE 客户端 + UI
 ├── config/
 │   └── providers.example.json 默认 Provider 模板
 ├── prompts/
@@ -133,9 +153,10 @@ steelg8/
 ## Roadmap
 
 - **Phase 0** ✅ 脚手架打通
-- **Phase 1** 🔄 记忆层 + Settings UI + Provider 切换
-- **Phase 2** 模板库可视化 + 向量检索（云端 Embedding）
-- **Phase 3** Canvas / Scratch 多窗体
+- **Phase 0.5** ✅ 四层路由 + 模型画像 + agent loop + SSE 流式
+- **Phase 1** 🔄 WKWebView 对话窗（已做）→ Canvas 基础 → Scratch 侧栏
+- **Phase 2** 项目记忆 + 模板库 + 云端 Embedding
+- **Phase 3** Canvas / Scratch 扩展 + Web 三件套
 - **Phase 4** 全局热键与系统集成深化
 - **Phase 5** 飞书 Bot（移动端接入）
 - **Phase 6** 双机架构（Tailscale）+ 本地模型下沉（Ollama / bge-m3）
