@@ -1,0 +1,56 @@
+# ---------- Swift / Xcode ----------
+.build/
+.swiftpm/
+DerivedData/
+*.xcodeproj/
+*.xcworkspace/
+Package.resolved
+
+# ---------- Python ----------
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.venv/
+venv/
+env/
+
+# ---------- macOS ----------
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon?
+
+# ---------- Secrets / local config ----------
+# Keep .env.example and config/providers.example.json tracked,
+# never commit real keys or user-local configs.
+.env
+.env.local
+.env.*.local
+config/providers.json
+~/.steelg8/
+
+# ---------- Build / sandbox artifacts ----------
+.cache/
+.home/
+.local-test/
+
+# ---------- Editor / IDE ----------
+.claude/
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ---------- Office / doc temp files ----------
+~$*.docx
+~$*.xlsx
+~$*.pptx
+
+# ---------- Logs ----------
+*.log
+logs/
+
+# ---------- One-off internal docs ----------
+PUSH_TO_GITHUB.md
