@@ -26,6 +26,10 @@ private func purgeWebViewCaches() {
 /// - 开发阶段允许 web inspector；release 再关
 struct ChatWebView: NSViewRepresentable {
 
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+
     func makeNSView(context: Context) -> WKWebView {
         purgeWebViewCaches()
 
@@ -34,6 +38,9 @@ struct ChatWebView: NSViewRepresentable {
         let prefs = WKWebpagePreferences()
         prefs.allowsContentJavaScript = true
         config.defaultWebpagePreferences = prefs
+
+        // 注入 JS 桥：前端调 `window.webkit.messageHandlers.steelg8.postMessage(...)`
+        config.userContentController.add(context.coordinator, name: "steelg8")
 
         // 允许 file:// 访问本地其他文件、跨源读 127.0.0.1（本地内核）
         // 这些都是 WKWebView 未公开的 KVC key，在 macOS 14+ 仍可用
@@ -105,5 +112,47 @@ struct ChatWebView: NSViewRepresentable {
         url.deleteLastPathComponent() // Sources/
         url.deleteLastPathComponent() // repo root
         return url
+    }
+
+    /// JS→Swift 消息派发
+    final class Coordinator: NSObject, WKScriptMessageHandler {
+        func userContentController(
+            _ controller: WKUserContentController,
+            didReceive msg: WKScriptMessage
+        ) {
+            guard let body = msg.body as? [String: Any] else { return }
+            let action = (body["action"] as? String) ?? ""
+            Task { @MainActor in
+                Coordinator.handle(action: action)
+            }
+        }
+
+        @MainActor
+        static func handle(action: String) {
+            switch action {
+            case "openProjectPicker":
+                Task { @MainActor in
+                    _ = await ProjectPicker.pickAndOpen()
+                }
+            case "closeProject":
+                Task {
+                    var req = URLRequest(url: URL(string: "http://127.0.0.1:8765/project/close")!)
+                    req.httpMethod = "POST"
+                    req.httpBody = "{}".data(using: .utf8)
+                    req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+                    _ = try? await URLSession.shared.data(for: req)
+                }
+            case "reindexProject":
+                Task {
+                    var req = URLRequest(url: URL(string: "http://127.0.0.1:8765/project/reindex")!)
+                    req.httpMethod = "POST"
+                    req.httpBody = "{}".data(using: .utf8)
+                    req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+                    _ = try? await URLSession.shared.data(for: req)
+                }
+            default:
+                NSLog("steelg8: 未知 JS bridge action: \(action)")
+            }
+        }
     }
 }

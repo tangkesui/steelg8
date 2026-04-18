@@ -51,7 +51,20 @@
     projectPill: $("project-pill"),
     projectName: $("project-name"),
     projectChunks: $("project-chunks"),
+    sidebarProject: $("sidebar-project"),
+    spBody: $("sp-body"),
+    projectOpenBtn: $("project-open-btn"),
   };
+
+  // 是否运行在 WKWebView 里（有 webkit bridge）
+  const HAS_SWIFT_BRIDGE = !!(window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.steelg8);
+  function swiftBridge(action) {
+    if (HAS_SWIFT_BRIDGE) {
+      window.webkit.messageHandlers.steelg8.postMessage({ action });
+      return true;
+    }
+    return false;
+  }
 
   // 独立召唤窗模式（#scratch）：把 chat 列隐藏，侧栏撑满窗口
   const SCRATCH_ONLY = location.hash.replace(/^#/, "") === "scratch";
@@ -378,52 +391,127 @@
   // ================== Project（RAG 项目）==================
 
   async function refreshProject() {
-    if (!UI.projectPill) return;
     try {
       const r = await fetch(`${API_BASE}/project`, { cache: "no-store" });
       if (!r.ok) return;
       const j = await r.json();
       const active = j.active;
-      if (!active) {
-        UI.projectPill.classList.add("is-empty");
-        UI.projectPill.classList.remove("indexing");
-        if (UI.projectName) UI.projectName.textContent = "未选项目";
-        if (UI.projectChunks) UI.projectChunks.textContent = "";
-        UI.projectPill.title = "点击打开一个文件夹";
-        return;
-      }
-      UI.projectPill.classList.remove("is-empty");
-      if (UI.projectName) UI.projectName.textContent = active.name || "项目";
-      const idx = active.indexStatus || {};
-      const isRunning = idx.state === "running";
-      const isError = idx.state === "error";
-      UI.projectPill.classList.toggle("indexing", isRunning);
-      UI.projectPill.classList.toggle("error", isError);
-      let chunkLabel;
-      if (isRunning) {
-        chunkLabel = `索引中 ${idx.embedded_chunks || 0}/${idx.total_chunks || "?"}`;
-      } else if (isError) {
-        chunkLabel = "索引失败 ⚠";
-      } else {
-        chunkLabel = `${active.chunkCount} chunks`;
-      }
-      if (UI.projectChunks) UI.projectChunks.textContent = chunkLabel;
-      const tip = [
-        `项目：${active.name}`,
-        `路径：${active.path}`,
-        `chunks：${active.chunkCount}`,
-        `状态：${idx.state || "?"}`,
-      ];
-      if (idx.error) tip.push(`错误：${idx.error}`);
-      UI.projectPill.title = tip.join("\n");
+      renderProjectPill(active);
+      renderSidebarProject(active);
     } catch (_) {}
   }
 
+  function renderProjectPill(active) {
+    if (!UI.projectPill) return;
+    if (!active) {
+      UI.projectPill.classList.add("is-empty");
+      UI.projectPill.classList.remove("indexing", "error");
+      if (UI.projectName) UI.projectName.textContent = "未选项目";
+      if (UI.projectChunks) UI.projectChunks.textContent = "";
+      UI.projectPill.title = "点击打开一个文件夹";
+      return;
+    }
+    UI.projectPill.classList.remove("is-empty");
+    if (UI.projectName) UI.projectName.textContent = active.name || "项目";
+    const idx = active.indexStatus || {};
+    const isRunning = idx.state === "running";
+    const isError = idx.state === "error";
+    UI.projectPill.classList.toggle("indexing", isRunning);
+    UI.projectPill.classList.toggle("error", isError);
+    let chunkLabel;
+    if (isRunning) chunkLabel = `索引中 ${idx.embedded_chunks || 0}/${idx.total_chunks || "?"}`;
+    else if (isError) chunkLabel = "索引失败 ⚠";
+    else chunkLabel = `${active.chunkCount} chunks`;
+    if (UI.projectChunks) UI.projectChunks.textContent = chunkLabel;
+    const tip = [
+      `项目：${active.name}`,
+      `路径：${active.path}`,
+      `chunks：${active.chunkCount}`,
+      `状态：${idx.state || "?"}`,
+    ];
+    if (idx.error) tip.push(`错误：${idx.error}`);
+    UI.projectPill.title = tip.join("\n");
+  }
+
+  function renderSidebarProject(active) {
+    if (!UI.spBody) return;
+    if (!active) {
+      UI.spBody.classList.add("sp-empty");
+      UI.spBody.innerHTML =
+        '<div class="sp-hint">还没选项目。点「打开…」选一个文件夹，steelg8 会索引里面的 .md / .txt 供对话引用。</div>';
+      return;
+    }
+    UI.spBody.classList.remove("sp-empty");
+    const idx = active.indexStatus || {};
+    const state = idx.state || "idle";
+    let stateLabel = "就绪";
+    let stateCls = "";
+    if (state === "running") {
+      stateLabel = `索引中 ${idx.embedded_chunks || 0}/${idx.total_chunks || "?"}`;
+      stateCls = "sp-running";
+    } else if (state === "error") {
+      stateLabel = "索引失败";
+      stateCls = "sp-error";
+    }
+    const esc = (s) => window.SteelMarkdown.escape(String(s || ""));
+    const errorBlock = idx.error
+      ? `<div class="sp-error-msg">${esc(idx.error)}</div>`
+      : "";
+    UI.spBody.innerHTML = `
+      <div class="sp-name">${esc(active.name)}</div>
+      <div class="sp-path" title="${esc(active.path)}">${esc(active.path)}</div>
+      <div class="sp-status ${stateCls}">
+        <span class="sp-state">${esc(stateLabel)}</span>
+        <span class="sp-chunks">${active.chunkCount || 0} chunks</span>
+      </div>
+      ${errorBlock}
+      <div class="sp-actions">
+        <button data-action="reindex">重新索引</button>
+        <button data-action="change">换目录</button>
+        <button data-action="close" class="danger">关闭</button>
+      </div>
+    `;
+    UI.spBody.querySelectorAll("button[data-action]").forEach((b) => {
+      b.addEventListener("click", () => handleProjectAction(b.getAttribute("data-action")));
+    });
+  }
+
+  function handleProjectAction(action) {
+    switch (action) {
+      case "reindex":
+        if (!swiftBridge("reindexProject")) {
+          fetch(`${API_BASE}/project/reindex`, { method: "POST" }).catch(() => {});
+        }
+        setTimeout(refreshProject, 500);
+        break;
+      case "change":
+        if (!swiftBridge("openProjectPicker")) {
+          flashRouting("菜单栏 → 打开项目文件夹…");
+        }
+        break;
+      case "close":
+        if (!confirm("关闭当前项目？索引缓存仍保留，下次可直接打开。")) return;
+        if (!swiftBridge("closeProject")) {
+          fetch(`${API_BASE}/project/close`, { method: "POST" }).catch(() => {});
+        }
+        setTimeout(refreshProject, 300);
+        break;
+    }
+  }
+
+  if (UI.projectOpenBtn) {
+    UI.projectOpenBtn.addEventListener("click", () => {
+      if (!swiftBridge("openProjectPicker")) {
+        flashRouting("菜单栏 → 打开项目文件夹…（只在 WKWebView 里能直接弹面板）");
+      }
+    });
+  }
+
   if (UI.projectPill) {
-    UI.projectPill.addEventListener("click", async () => {
-      // 让 Swift 端负责 NSOpenPanel；这里没有跨桥没法直接弹出，
-      // 所以兜底提示用户走菜单栏
-      flashRouting("菜单栏 → 打开项目文件夹…（⌘⇧O）");
+    UI.projectPill.addEventListener("click", () => {
+      if (!swiftBridge("openProjectPicker")) {
+        flashRouting("菜单栏 → 打开项目文件夹…（⌘⇧O）");
+      }
     });
   }
 
