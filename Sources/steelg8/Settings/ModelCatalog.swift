@@ -92,10 +92,9 @@ enum ModelCatalog {
         .init("nousresearch/hermes-4-70b", label: "Hermes 4 70B", hint: "开源指令微调"),
         // ---- 测试专用：超便宜 / 免费 ----
         .init("google/gemini-2.5-flash-lite", label: "Gemini 2.5 Flash Lite", hint: "★ 测试首选，~$0.10/M"),
-        .init("google/gemini-flash-1.5-8b", label: "Gemini Flash 1.5 8B", hint: "极便宜"),
         .init("openai/gpt-4o-mini", label: "GPT-4o mini", hint: "便宜英文测"),
-        .init("meta-llama/llama-3.3-70b-instruct:free", label: "Llama 3.3 70B :free", hint: "免费，有限流"),
-        .init("google/gemma-3-27b-it:free", label: "Gemma 3 27B :free", hint: "免费，有限流")
+        .init("meta-llama/llama-3.3-70b-instruct:free", label: "Llama 3.3 70B :free", hint: "免费，限速"),
+        .init("google/gemma-3-27b-it:free", label: "Gemma 3 27B :free", hint: "免费，限速")
     ]
 
     // MARK: - 智谱 GLM（预留，用户若加 provider 名 "zhipu" / "glm" 即走这套）

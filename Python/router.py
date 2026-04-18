@@ -185,7 +185,19 @@ def route(
             reason="未命中规则，走廉价兜底",
         )
 
-    # 4. registry 里第一个 ready 的（最终兜底，等价于以前的 first_ready）
+    # 4. default_model 优先（如果指向了就绪的 provider）
+    if registry.default_model:
+        resolved = registry.resolve(registry.default_model)
+        if resolved:
+            provider, model = resolved
+            return RoutingDecision(
+                model=model or registry.default_model,
+                provider=provider.name,
+                layer="fallback",
+                reason=f"兜底用 default_model={registry.default_model}",
+            )
+
+    # 5. registry 里第一个 ready 的（最终兜底）
     ready = registry.first_ready()
     if ready:
         provider, model = ready
@@ -193,7 +205,7 @@ def route(
             model=model or registry.default_model or "",
             provider=provider.name,
             layer="fallback",
-            reason="没有画像匹配且廉价层缺席，用第一个就绪 provider 兜底",
+            reason="没有画像匹配且无 default_model，用第一个就绪 provider 兜底",
         )
 
     # 5. 彻底没 provider：mock

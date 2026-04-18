@@ -50,8 +50,7 @@ PRICING: dict[str, Price] = {
     "google/gemini-2.5-pro":        Price(1.25, 10.00),
     "google/gemini-2.5-flash":      Price(0.30, 2.50),
     "google/gemini-2.5-flash-lite": Price(0.10, 0.40),
-    "google/gemini-flash-1.5":      Price(0.075, 0.30),
-    "google/gemini-flash-1.5-8b":   Price(0.0375, 0.15),
+    # 注：Gemini 1.5 系列已被 OpenRouter 下架（2025Q4），仅保留 ref 不再推荐
 
     # ---- OpenRouter / OpenAI ----
     "openai/gpt-4o":                Price(2.50, 10.00),
