@@ -50,15 +50,15 @@
       <div class="sp-divider"></div>
 
       <div class="scratch-head">
-        <span class="scratch-title">📋 捕获台</span>
+        <span class="scratch-title">📝 便签</span>
+        <span id="scratch-save-state" class="scratch-save-state"></span>
         <button id="scratch-toggle" class="scratch-toggle" title="收起 / 展开">⟨</button>
       </div>
-      <div id="scratch-list" class="scratch-list">
-        <div class="scratch-empty">还没有内容。在下面随手写一条。</div>
-      </div>
-      <div class="scratch-composer">
-        <textarea id="scratch-input" rows="2" placeholder="随手记一条…（⌘+Enter 追加）"></textarea>
-        <button id="scratch-add" class="scratch-add">追加</button>
+      <textarea id="scratch-note" class="scratch-note"
+                placeholder="随手记…&#10;&#10;自动保存，不怕丢。&#10;⌘⇧N 从任何地方呼出。"></textarea>
+      <div class="scratch-footer">
+        <button id="scratch-to-notes" title="把便签内容存到 Apple 备忘录">📝 存备忘录</button>
+        <button id="scratch-clear" class="secondary" title="清空便签">清空</button>
       </div>
     </aside>
 
@@ -80,7 +80,6 @@
           <span id="routing-hint" class="routing-hint"></span>
           <span id="error-hint" class="error-hint"></span>
         </div>
-        <div id="attach-chip-row" class="attach-chip-row"></div>
         <div class="input-row">
           <textarea id="input" rows="2" placeholder="输入消息，⌘/Ctrl + Enter 发送"></textarea>
           <button id="send" class="send-btn">发送</button>

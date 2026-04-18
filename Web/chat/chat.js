@@ -43,10 +43,11 @@
     error: $("error-hint"),
     usagePill: $("usage-pill"),
     scratch: $("scratch"),
-    scratchList: $("scratch-list"),
-    scratchInput: $("scratch-input"),
-    scratchAdd: $("scratch-add"),
+    scratchNote: $("scratch-note"),
+    scratchSaveState: $("scratch-save-state"),
     scratchToggle: $("scratch-toggle"),
+    scratchToNotes: $("scratch-to-notes"),
+    scratchClear: $("scratch-clear"),
     attachRow: $("attach-chip-row"),
     projectPill: $("project-pill"),
     projectName: $("project-name"),
@@ -80,9 +81,9 @@
   let activeDeltaNode = null;
   let activeFullBuffer = "";
 
-  // Scratch 状态
-  let scratchEntries = [];              // 后端返回的活跃 entry
-  const attachedIds = new Set();        // 被"附加"的 entry id，下次发送会一起注入
+  // Scratch 便签（单文本）
+  let scratchNoteText = "";
+  let scratchSaveTimer = null;
 
   // --------------- bootstrap ---------------
 
@@ -103,298 +104,79 @@
     return null;
   }
 
-  // ================== Scratch 捕获台 ==================
+  // ================== 便签（单文本，自动保存） ==================
 
-  async function refreshScratch() {
+  async function loadScratchNote() {
+    if (!UI.scratchNote) return;
     try {
-      const r = await fetch(`${API_BASE}/scratch`, { cache: "no-store" });
+      const r = await fetch(`${API_BASE}/scratch/note`, { cache: "no-store" });
       if (!r.ok) return;
       const j = await r.json();
-      scratchEntries = j.items || [];
-      // 清理掉被删除的 attachedIds
-      for (const id of [...attachedIds]) {
-        if (!scratchEntries.find((e) => e.id === id)) attachedIds.delete(id);
+      const remote = (j && j.text) || "";
+      // 避免用户正在输入时被远端覆盖：只在本地没改过 / 空 / 首次时同步
+      if (!scratchNoteText && !document.activeElement === UI.scratchNote) {
+        UI.scratchNote.value = remote;
+      } else if (!UI.scratchNote.value && remote) {
+        UI.scratchNote.value = remote;
       }
-      renderScratch();
-      renderAttachChips();
+      scratchNoteText = UI.scratchNote.value;
+      setSaveState("已同步");
     } catch (e) {
-      console.error("refreshScratch failed", e);
+      console.error("loadScratchNote failed", e);
     }
   }
 
-  function renderScratch() {
-    if (!UI.scratchList) return;
-    if (!scratchEntries.length) {
-      UI.scratchList.innerHTML =
-        '<div class="scratch-empty">还没有内容。在下面随手写一条。</div>';
-      return;
-    }
-    // 时间轴：最旧在上，最新在下
-    const html = scratchEntries
-      .map((e) => {
-        const attached = attachedIds.has(e.id);
-        const savedCls = e.saved ? " is-saved" : "";
-        const attachCls = attached ? " is-attached" : "";
-        const ts = friendlyTime(e.ts);
-        const text = window.SteelMarkdown.escape(e.text);
-        return `
-        <div class="scratch-item${savedCls}${attachCls}" data-id="${e.id}">
-          <div class="si-text">${text}</div>
-          <div class="si-meta">${ts}${e.origin && e.origin !== "manual" ? " · " + e.origin : ""}</div>
-          <div class="si-actions">
-            <button data-action="send" title="文本发到对话输入框">🔁 发送</button>
-            <button data-action="attach" class="${attached ? "active" : ""}" title="作为上下文附到下一次发送">📎 ${attached ? "已附加" : "附加"}</button>
-            <button data-action="notes" title="存到 Apple 备忘录（iCloud 同步到 iPhone）">📝 备忘录</button>
-            <button data-action="delete" class="danger" title="删除">✕</button>
-          </div>
-        </div>`;
-      })
-      .join("");
-    UI.scratchList.innerHTML = html;
-    // 滚到底部（最新一条）
-    UI.scratchList.scrollTop = UI.scratchList.scrollHeight;
+  function scheduleScratchSave() {
+    setSaveState("未保存…");
+    clearTimeout(scratchSaveTimer);
+    scratchSaveTimer = setTimeout(doScratchSave, 600);
   }
 
-  function renderAttachChips() {
-    if (!UI.attachRow) return;
-    if (!attachedIds.size) {
-      UI.attachRow.innerHTML = "";
-      return;
-    }
-    const chips = [...attachedIds]
-      .map((id) => scratchEntries.find((e) => e.id === id))
-      .filter(Boolean)
-      .map((e) => {
-        const preview = window.SteelMarkdown.escape(
-          (e.text || "").slice(0, 30) + (e.text.length > 30 ? "…" : "")
-        );
-        return `<span class="attach-chip" data-id="${e.id}">
-          <span class="chip-text">📎 ${preview}</span>
-          <span class="chip-x" data-id="${e.id}">×</span>
-        </span>`;
-      })
-      .join("");
-    UI.attachRow.innerHTML = chips;
-  }
-
-  function friendlyTime(iso) {
-    if (!iso) return "";
+  async function doScratchSave() {
+    const text = UI.scratchNote ? UI.scratchNote.value : "";
     try {
-      const d = new Date(iso);
-      const now = new Date();
-      const diff = (now - d) / 1000;
-      if (diff < 60) return "刚刚";
-      if (diff < 3600) return `${Math.floor(diff / 60)} 分钟前`;
-      if (diff < 86400) return `${Math.floor(diff / 3600)} 小时前`;
-      return d.toLocaleString("zh-CN", {
-        month: "2-digit",
-        day: "2-digit",
-        hour: "2-digit",
-        minute: "2-digit",
-      });
-    } catch (_) {
-      return iso;
-    }
-  }
-
-  async function addScratch(text) {
-    text = (text || "").trim();
-    if (!text) return;
-    try {
-      const r = await fetch(`${API_BASE}/scratch`, {
+      const r = await fetch(`${API_BASE}/scratch/note`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text, origin: "manual" }),
+        body: JSON.stringify({ text }),
       });
       if (!r.ok) {
-        setErrorHint(`追加失败：HTTP ${r.status}`);
+        setSaveState("保存失败");
         return;
       }
-      await refreshScratch();
-    } catch (e) {
-      setErrorHint(`追加失败：${e.message || e}`);
+      scratchNoteText = text;
+      setSaveState("已保存");
+    } catch (_) {
+      setSaveState("保存失败");
     }
   }
 
-  async function deleteScratch(id) {
-    try {
-      await fetch(`${API_BASE}/scratch/${encodeURIComponent(id)}`, {
-        method: "DELETE",
-      });
-      attachedIds.delete(id);
-      await refreshScratch();
-    } catch (_) {}
+  function setSaveState(msg) {
+    if (UI.scratchSaveState) UI.scratchSaveState.textContent = msg || "";
   }
 
-  async function markScratchSaved(id) {
-    try {
-      await fetch(`${API_BASE}/scratch/${encodeURIComponent(id)}/save`, {
-        method: "POST",
-      });
-      await refreshScratch();
-    } catch (_) {}
+  function clearScratchNote() {
+    if (!UI.scratchNote) return;
+    UI.scratchNote.value = "";
+    scheduleScratchSave();
+    UI.scratchNote.focus();
   }
 
-  async function organizeScratch(id) {
-    const entry = scratchEntries.find((e) => e.id === id);
-    if (!entry) return;
-    showOrganizeModal(entry, null, "loading");
-    try {
-      const r = await fetch(
-        `${API_BASE}/scratch/${encodeURIComponent(id)}/organize`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: "{}",
-        }
-      );
-      const j = await r.json();
-      showOrganizeModal(entry, j, "ok");
-      refreshUsagePill(); // organize 也算一次计费调用
-    } catch (e) {
-      showOrganizeModal(entry, { organized: "整理失败：" + (e.message || e) }, "error");
-    }
-  }
-
-  function showOrganizeModal(entry, result, state) {
-    const existing = document.querySelector(".modal-backdrop");
-    if (existing) existing.remove();
-
-    const backdrop = document.createElement("div");
-    backdrop.className = "modal-backdrop";
-
-    const loadingHtml = '<div style="text-align:center;color:var(--text-dim);padding:20px">AI 整理中…</div>';
-    const body =
-      state === "loading"
-        ? loadingHtml
-        : `
-      <div class="modal-section">
-        <h4>原文</h4>
-        <div class="original-text">${window.SteelMarkdown.escape(entry.text)}</div>
-      </div>
-      <div class="modal-section">
-        <h4>AI 整理后</h4>
-        <div>${window.SteelMarkdown.render(result.organized || "")}</div>
-      </div>
-    `;
-
-    const cost = result && result.costUsd ? `花费 $${Number(result.costUsd).toFixed(6)} · ${result.model || ""}` : "";
-
-    backdrop.innerHTML = `
-      <div class="modal">
-        <div class="modal-head">
-          <h3>✨ AI 整理这条</h3>
-          <button class="modal-close" data-action="close">×</button>
-        </div>
-        <div class="modal-body">${body}</div>
-        <div class="modal-foot">
-          <span class="cost-hint">${cost}</span>
-          ${state === "ok"
-            ? `<button data-action="replace">替换原文</button>
-               <button data-action="append">追加到捕获台</button>
-               <button class="primary" data-action="send">发送到对话</button>`
-            : `<button data-action="close">关闭</button>`}
-        </div>
-      </div>`;
-
-    backdrop.addEventListener("click", async (e) => {
-      const action = e.target.getAttribute("data-action");
-      if (!action && e.target !== backdrop) return;
-      if (action === "close" || e.target === backdrop) {
-        backdrop.remove();
-        return;
-      }
-      if (!result) return;
-      if (action === "replace") {
-        // 用整理后的文本新增一条，删除原条
-        await fetch(`${API_BASE}/scratch`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            text: result.organized,
-            origin: "ai-organize",
-            tags: entry.tags,
-          }),
-        });
-        await deleteScratch(entry.id);
-        backdrop.remove();
-      } else if (action === "append") {
-        await fetch(`${API_BASE}/scratch`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            text: result.organized,
-            origin: "ai-organize",
-            tags: entry.tags,
-          }),
-        });
-        await refreshScratch();
-        backdrop.remove();
-      } else if (action === "send") {
-        backdrop.remove();
-        UI.input.value = result.organized;
-        UI.input.focus();
-      }
-    });
-
-    document.body.appendChild(backdrop);
-  }
-
-  // 用户点击 scratch list 里的按钮
-  function handleScratchClick(ev) {
-    const btn = ev.target.closest("button[data-action]");
-    if (!btn) return;
-    const card = ev.target.closest(".scratch-item");
-    if (!card) return;
-    const id = card.getAttribute("data-id");
-    const entry = scratchEntries.find((e) => e.id === id);
-    if (!entry) return;
-    const action = btn.getAttribute("data-action");
-
-    switch (action) {
-      case "send":
-        UI.input.value = entry.text;
-        UI.input.focus();
-        break;
-      case "attach":
-        if (attachedIds.has(id)) attachedIds.delete(id);
-        else attachedIds.add(id);
-        renderScratch();
-        renderAttachChips();
-        break;
-      case "notes":
-        saveToNotes(entry);
-        break;
-      case "delete":
-        // scratch 单击直接删（误删了再加一条即可；别烦用户弹框）
-        deleteScratch(id);
-        break;
-    }
-  }
-
-  async function saveToNotes(entry) {
-    const title = (entry.text || "").split("\n")[0].trim().slice(0, 40) || "steelg8 捕获";
-    const ok = swiftBridge("saveToNotes", {
-      folder: "steelg8",
-      title,
-      body: entry.text || "",
-    });
-    if (!ok) {
-      flashRouting("需要在 WKWebView 里才能调 Notes");
+  function saveNoteToAppleNotes() {
+    const text = UI.scratchNote ? UI.scratchNote.value : "";
+    if (!text.trim()) {
+      setSaveState("便签是空的");
+      setTimeout(() => setSaveState("已保存"), 1200);
       return;
     }
-    flashRouting("正在推到 Apple 备忘录…");
-  }
-
-  function handleAttachChipClick(ev) {
-    const x = ev.target.closest(".chip-x");
-    if (!x) return;
-    const id = x.getAttribute("data-id");
-    if (id) {
-      attachedIds.delete(id);
-      renderScratch();
-      renderAttachChips();
+    const title = text.split("\n")[0].trim().slice(0, 40) || "steelg8 便签";
+    const ok = swiftBridge("saveToNotes", { folder: "steelg8", title, body: text });
+    if (!ok) {
+      setSaveState("需要在 WKWebView 里");
+      return;
     }
+    setSaveState("已推到 Apple 备忘录");
+    setTimeout(() => setSaveState("已保存"), 2000);
   }
 
   // ================== usage pill ==================
@@ -847,22 +629,7 @@
     if (!text) return;
     sendStartTs = Date.now();
 
-    // 如果有附加的 scratch，拼到 message 前面做为背景资料
-    const attachedEntries = [...attachedIds]
-      .map((id) => scratchEntries.find((e) => e.id === id))
-      .filter(Boolean);
-    let finalMessage = text;
-    if (attachedEntries.length) {
-      const ctxBlocks = attachedEntries
-        .map((e, i) => `[${i + 1}] ${e.text}`)
-        .join("\n\n");
-      finalMessage =
-        `【背景资料（来自捕获台）】\n${ctxBlocks}\n\n【我的问题】\n${text}`;
-      // 发送后清空附加，让用户下一条默认不带
-      attachedIds.clear();
-      renderScratch();
-      renderAttachChips();
-    }
+    const finalMessage = text;
 
     sending = true;
     UI.send.disabled = true;
@@ -1015,26 +782,20 @@
     sendMessage(text);
   });
 
-  // Scratch events
-  if (UI.scratchAdd) {
-    UI.scratchAdd.addEventListener("click", async () => {
-      const t = UI.scratchInput.value;
-      UI.scratchInput.value = "";
-      await addScratch(t);
-    });
+  // 便签 events
+  if (UI.scratchNote) {
+    UI.scratchNote.addEventListener("input", scheduleScratchSave);
+    UI.scratchNote.addEventListener("blur", doScratchSave);
   }
-  if (UI.scratchInput) {
-    UI.scratchInput.addEventListener("keydown", (e) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
-        e.preventDefault();
-        const t = UI.scratchInput.value;
-        UI.scratchInput.value = "";
-        addScratch(t);
-      }
-    });
+  if (UI.scratchToNotes) {
+    UI.scratchToNotes.addEventListener("click", saveNoteToAppleNotes);
   }
-  if (UI.scratchList) {
-    UI.scratchList.addEventListener("click", handleScratchClick);
+  if (UI.scratchClear) {
+    UI.scratchClear.addEventListener("click", () => {
+      if (UI.scratchNote && UI.scratchNote.value &&
+          !confirm("清空便签？")) return;
+      clearScratchNote();
+    });
   }
   if (UI.scratchToggle) {
     UI.scratchToggle.addEventListener("click", () => {
@@ -1042,15 +803,12 @@
       UI.scratch.setAttribute("data-mode", mode);
     });
   }
-  if (UI.attachRow) {
-    UI.attachRow.addEventListener("click", handleAttachChipClick);
-  }
-  // ⌘⇧N 聚焦到 scratch 输入框（hotkey 在 Swift 也会召唤窗口）
+  // ⌘⇧N 展开并聚焦便签
   document.addEventListener("keydown", (e) => {
-    if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === "N" && UI.scratchInput) {
+    if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === "N" && UI.scratchNote) {
       e.preventDefault();
       UI.scratch.setAttribute("data-mode", "sidebar");
-      UI.scratchInput.focus();
+      UI.scratchNote.focus();
     }
   });
 
@@ -1097,23 +855,20 @@
     await refreshHealth();
     await refreshProviders();
     await refreshUsagePill();
-    await refreshScratch();
+    await loadScratchNote();
     await refreshProject();
-    // 每 8s health、15s usage、5s scratch、3s project（索引跑时能看到进度）
+    // 每 8s health、15s usage、3s project（索引跑时能看到进度）
     setInterval(refreshHealth, 8000);
     setInterval(refreshUsagePill, 15000);
-    setInterval(refreshScratch, 5000);
     setInterval(refreshProject, 3000);
 
     document.addEventListener("visibilitychange", () => {
       if (!document.hidden) {
-        refreshScratch();
         refreshUsagePill();
         refreshProject();
       }
     });
     window.addEventListener("focus", () => {
-      refreshScratch();
       refreshUsagePill();
       refreshProject();
     });

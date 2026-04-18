@@ -177,9 +177,8 @@ class SteelG8Handler(BaseHTTPRequestHandler):
             self.respond(200, {"items": usage.recent(limit=100)})
             return
 
-        if self.path == "/scratch":
-            entries = scratch.list_entries()
-            self.respond(200, {"items": [e.to_dict() for e in entries]})
+        if self.path == "/scratch/note":
+            self.respond(200, {"text": scratch.read()})
             return
 
         if self.path == "/project":
@@ -231,22 +230,14 @@ class SteelG8Handler(BaseHTTPRequestHandler):
             self._handle_chat(stream=True)
             return
 
-        if self.path == "/scratch":
-            self._handle_scratch_append()
-            return
-
-        if self.path.startswith("/scratch/") and self.path.endswith("/organize"):
-            sid = self.path[len("/scratch/"):-len("/organize")]
-            self._handle_scratch_organize(sid)
-            return
-
-        if self.path.startswith("/scratch/") and self.path.endswith("/save"):
-            sid = self.path[len("/scratch/"):-len("/save")]
-            entry = scratch.update(sid, saved=True)
-            if entry:
-                self.respond(200, entry.to_dict())
-            else:
-                self.respond(404, {"error": "not found"})
+        if self.path == "/scratch/note":
+            body = self.read_json() or {}
+            text = body.get("text", "")
+            if not isinstance(text, str):
+                self.respond(400, {"error": "text must be string"})
+                return
+            scratch.write(text)
+            self.respond(200, {"ok": True, "length": len(text)})
             return
 
         if self.path == "/project/open":
@@ -284,13 +275,6 @@ class SteelG8Handler(BaseHTTPRequestHandler):
         self.respond(404, {"error": "not found"})
 
     def do_DELETE(self) -> None:  # noqa: N802
-        if self.path.startswith("/scratch/"):
-            sid = self.path[len("/scratch/"):]
-            if scratch.delete(sid):
-                self.respond(200, {"ok": True, "id": sid})
-            else:
-                self.respond(404, {"error": "not found"})
-            return
         self.respond(404, {"error": "not found"})
 
     # ------------------- handlers -------------------
@@ -433,68 +417,6 @@ class SteelG8Handler(BaseHTTPRequestHandler):
             self.respond(400, {"error": str(exc)})
             return
         self.respond(200, {"output": r.output_path, "inserted": r.inserted_elements})
-
-    def _handle_scratch_append(self) -> None:
-        body = self.read_json()
-        if not isinstance(body, dict):
-            self.respond(400, {"error": "invalid json"})
-            return
-        text = str(body.get("text", "")).strip()
-        if not text:
-            self.respond(400, {"error": "text is required"})
-            return
-        origin = str(body.get("origin", "manual"))
-        tags = body.get("tags") or []
-        if not isinstance(tags, list):
-            tags = []
-        entry = scratch.append(text, origin=origin, tags=[str(t) for t in tags])
-        self.respond(201, entry.to_dict())
-
-    def _handle_scratch_organize(self, sid: str) -> None:
-        """让 AI 整理这段 scratch。返回整理后的新内容，不覆盖原 entry。
-
-        调用方拿到 organized 文本后，决定是附加回 scratch、替换原文、还是发到对话。
-        """
-        entry = scratch.find(sid)
-        if entry is None or entry.status == "archived":
-            self.respond(404, {"error": "scratch not found"})
-            return
-
-        soul_text = ensure_soul_file()
-        instruction = (
-            "把下面这段零散想法整理成结构化文本：保留原意不增删，"
-            "按 要点 / 细节 / 待确认 三层分组；能分条的用 markdown 列表；"
-            "不加前言后语。\n\n"
-            f"---\n{entry.text}\n---"
-        )
-        # organize 是结构化改写，用 default_model 就够了，不走自动升档路由
-        # （否则 scratch 文本里的关键词会触发 writing rule，误路由到 Claude）
-        explicit = self.registry.default_model or None
-        decision = router.route(instruction, self.registry, explicit_model=explicit)
-        provider = self.registry.providers.get(decision.provider) if decision.provider else None
-
-        context = agent.AgentContext(system_prompt=build_system_prompt(soul_text))
-        result = agent.run_once(instruction, context, provider, decision)
-
-        # 即使是 mock 也原样返回；前端自己判断
-        if result.source.startswith("provider:") and result.usage:
-            usage.record(
-                model=result.decision.model,
-                provider=result.decision.provider,
-                layer=result.decision.layer,
-                prompt_tokens=result.usage.get("prompt_tokens", 0),
-                completion_tokens=result.usage.get("completion_tokens", 0),
-            )
-
-        self.respond(200, {
-            "original": entry.to_dict(),
-            "organized": result.content,
-            "model": result.decision.model,
-            "provider": result.decision.provider,
-            "costUsd": round(result.cost_usd, 8),
-            "usage": result.usage,
-            "source": result.source,
-        })
 
     def _handle_reload(self) -> None:
         new_registry = load_registry(example_candidates=(EXAMPLE_PROVIDERS_PATH,))
