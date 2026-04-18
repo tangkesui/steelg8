@@ -56,7 +56,7 @@ echo "📦 复制 Python / Web 资源..."
 rm -rf "${RESOURCES}/Python" "${RESOURCES}/Web" "${RESOURCES}/prompts" "${RESOURCES}/config"
 mkdir -p "${RESOURCES}/Python" "${RESOURCES}/Web/chat" "${RESOURCES}/prompts" "${RESOURCES}/config"
 cp Python/*.py       "${RESOURCES}/Python/"
-cp Web/chat/*        "${RESOURCES}/Web/chat/" 2>/dev/null || true
+cp -R Web/chat/.     "${RESOURCES}/Web/chat/" 2>/dev/null || true
 cp prompts/*         "${RESOURCES}/prompts/"
 cp config/*          "${RESOURCES}/config/"
 

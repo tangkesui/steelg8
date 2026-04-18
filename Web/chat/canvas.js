@@ -98,27 +98,32 @@
     const seq = ++renderSeq;
     const text = state.content || "";
 
-    // 1) 先把 ```mermaid 块抽出来替换成占位 div
+    // 1) 先把 ```mermaid 块抽出来换成占位符
+    //    用 \u0000 包裹：Markdown 渲染器的 escHTML 不会转义它，
+    //    之后正则就能找到占位符替换成 .mermaid 容器
     const mermaidBlocks = [];
     const withoutMermaid = text.replace(
       /```mermaid\s*\n([\s\S]*?)\n```/g,
       (_m, code) => {
         const idx = mermaidBlocks.length;
         mermaidBlocks.push(code.trim());
-        return `<!--MERMAID_SLOT_${idx}-->`;
+        return `\u0000MMSLOT${idx}\u0000`;
       }
     );
 
     // 2) 其余走现有 Markdown 渲染
     let html = window.SteelMarkdown.render(withoutMermaid);
 
-    // 3) 把 mermaid 占位还原成 .mermaid 容器
-    html = html.replace(/<!--MERMAID_SLOT_(\d+)-->/g, (_m, i) => {
+    // 3) 把占位符还原成 .mermaid 容器
+    //    先把 <p>...</p> 包裹整体替掉（避免在 <p> 里嵌 <div> 导致 DOM 被切）
+    const slotToDiv = (i) => {
       const id = `mermaid-${seq}-${i}`;
       return `<div class="mermaid" id="${id}" data-src="${encodeURIComponent(
         mermaidBlocks[Number(i)]
       )}"></div>`;
-    });
+    };
+    html = html.replace(/<p>\s*\u0000MMSLOT(\d+)\u0000\s*<\/p>/g, (_m, i) => slotToDiv(i));
+    html = html.replace(/\u0000MMSLOT(\d+)\u0000/g, (_m, i) => slotToDiv(i));
 
     UI.preview.innerHTML = html;
 
