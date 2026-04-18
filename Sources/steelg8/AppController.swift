@@ -139,9 +139,13 @@ final class AppController: ObservableObject {
     @objc func showMainWindow() {
         NSApp.activate(ignoringOtherApps: true)
         for window in NSApp.windows where !(window is NSPanel) && window.canBecomeMain {
+            window.deminiaturize(nil)
             window.makeKeyAndOrderFront(nil)
             return
         }
+        // 关过主窗口后 NSApp.windows 里已经没有它；SwiftUI WindowGroup 响应
+        // newDocument: 会重新创建一个。
+        NSApp.sendAction(Selector(("newDocument:")), to: nil, from: nil)
     }
 
     @objc func openSettingsWindow() {

@@ -135,26 +135,28 @@ struct SettingsView: View {
 
                 GroupBox(label: Text("接入信息").font(.subheadline.bold())) {
                     VStack(alignment: .leading, spacing: 12) {
+                        // 按 provider name 查找，避免删除时 index 越界 crash
+                        let name = entry.name
                         labeledRow("Base URL") {
                             TextField("https://api.example.com", text: Binding(
-                                get: { viewModel.entries[index].baseURL },
-                                set: { viewModel.entries[index].baseURL = $0 }
+                                get: { viewModel.providerField(name: name, field: .baseURL) },
+                                set: { viewModel.setProviderField(name: name, field: .baseURL, value: $0) }
                             ))
                             .textFieldStyle(.roundedBorder)
                         }
 
                         labeledRow("API Key") {
                             SecureField("sk-...", text: Binding(
-                                get: { viewModel.entries[index].apiKey },
-                                set: { viewModel.entries[index].apiKey = $0 }
+                                get: { viewModel.providerField(name: name, field: .apiKey) },
+                                set: { viewModel.setProviderField(name: name, field: .apiKey, value: $0) }
                             ))
                             .textFieldStyle(.roundedBorder)
                         }
 
                         labeledRow("Env 变量名") {
                             TextField("KIMI_API_KEY", text: Binding(
-                                get: { viewModel.entries[index].apiKeyEnv },
-                                set: { viewModel.entries[index].apiKeyEnv = $0 }
+                                get: { viewModel.providerField(name: name, field: .apiKeyEnv) },
+                                set: { viewModel.setProviderField(name: name, field: .apiKeyEnv, value: $0) }
                             ))
                             .textFieldStyle(.roundedBorder)
                         }
@@ -382,6 +384,30 @@ final class SettingsViewModel: ObservableObject {
     func appendModelRow(providerIndex: Int) {
         guard entries.indices.contains(providerIndex) else { return }
         entries[providerIndex].modelRows.append(ModelRow(""))
+    }
+
+    // MARK: - 供应商字段（按 name 查找，避免 index 越界）
+
+    enum ProviderField {
+        case baseURL, apiKey, apiKeyEnv
+    }
+
+    func providerField(name: String, field: ProviderField) -> String {
+        guard let entry = entries.first(where: { $0.name == name }) else { return "" }
+        switch field {
+        case .baseURL:   return entry.baseURL
+        case .apiKey:    return entry.apiKey
+        case .apiKeyEnv: return entry.apiKeyEnv
+        }
+    }
+
+    func setProviderField(name: String, field: ProviderField, value: String) {
+        guard let idx = entries.firstIndex(where: { $0.name == name }) else { return }
+        switch field {
+        case .baseURL:   entries[idx].baseURL = value
+        case .apiKey:    entries[idx].apiKey = value
+        case .apiKeyEnv: entries[idx].apiKeyEnv = value
+        }
     }
 
     // MARK: - 供应商增删
