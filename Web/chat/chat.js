@@ -737,10 +737,23 @@
 
   // --------------- send flow ---------------
 
+  let sendStartTs = 0;
+
   async function sendMessage(text) {
-    if (sending) return;
+    // 防御：上一次 send 卡超过 2 分钟，强制重置（UI 挂住的保护）
+    if (sending) {
+      const stuck = Date.now() - sendStartTs > 120_000;
+      if (!stuck) {
+        setErrorHint("已有消息正在发送中…");
+        return;
+      }
+      console.warn("steelg8: 检测到 send 卡住超过 2 分钟，强制重置");
+      sending = false;
+      UI.send.disabled = false;
+    }
     text = (text || "").trim();
     if (!text) return;
+    sendStartTs = Date.now();
 
     // 如果有附加的 scratch，拼到 message 前面做为背景资料
     const attachedEntries = [...attachedIds]

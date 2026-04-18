@@ -129,9 +129,15 @@ def embed(
     )
 
 
-def embed_one(text: str, registry: ProviderRegistry, **kwargs: Any) -> list[float]:
-    """便捷：单条 embedding。"""
-    res = embed([text], registry, **kwargs)
+def embed_one(
+    text: str,
+    registry: ProviderRegistry,
+    *,
+    timeout: int = 10,
+    **kwargs: Any,
+) -> list[float]:
+    """便捷：单条 embedding。query 路径默认 10s 超时，避免阻塞对话。"""
+    res = embed([text], registry, timeout=timeout, **kwargs)
     if not res.vectors:
         raise EmbeddingError("embed_one 返回空")
     return res.vectors[0]

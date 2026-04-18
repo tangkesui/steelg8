@@ -29,6 +29,7 @@ from typing import Any
 
 import embedding
 import extract
+import rerank
 import vectordb
 from providers import ProviderRegistry
 
@@ -174,7 +175,7 @@ def _run_index_job(project: vectordb.ProjectRow, registry: ProviderRegistry) -> 
 
         if not all_chunks:
             vectordb.replace_chunks(project.id, [])
-            vectordb.mark_indexed(project.id)
+            vectordb.mark_indexed(project.id, embed_model=embedding.DEFAULT_MODEL)
             _update_status(
                 state="done",
                 finished_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
@@ -200,7 +201,7 @@ def _run_index_job(project: vectordb.ProjectRow, registry: ProviderRegistry) -> 
             for c, vec in zip(all_chunks, vectors)
         ]
         vectordb.replace_chunks(project.id, rows)
-        vectordb.mark_indexed(project.id)
+        vectordb.mark_indexed(project.id, embed_model=embedding.DEFAULT_MODEL)
 
         _update_status(
             state="done",
@@ -226,24 +227,82 @@ def retrieve(
     *,
     top_k: int = 5,
     min_score: float = 0.4,
+    coarse_k: int = 15,
+    use_rerank: bool = True,
+    query_timeout: int = 10,
 ) -> list[vectordb.Hit]:
-    """给用户的 query embedding 后在当前 active project 里检索。"""
+    """给用户的 query embedding 后在当前 active project 里检索。
+
+    流程：
+      1. embed(query) —— 短超时，失败就放弃 RAG
+      2. vectordb top-K 粗排（默认 15 条候选）
+      3. 若 use_rerank：调 qwen3-rerank 重排，取 top-K
+      4. 按 min_score 过滤
+    """
     active = get_active()
     if not active:
         return []
     project_id = active["id"]
 
-    # 等待索引至少就绪（不阻塞，没 embedding 就返回空）
-    if _STATUS.state == "running" and _STATUS.project_id == project_id and _STATUS.embedded_chunks == 0:
+    # 还在索引中且一条 embedding 都没出来 → 跳过
+    if (
+        _STATUS.state == "running"
+        and _STATUS.project_id == project_id
+        and _STATUS.embedded_chunks == 0
+    ):
+        return []
+
+    # 模型一致性校验：索引时用的模型名要和 query 用的一致
+    proj = vectordb.get_project(active["path"])
+    if proj and proj.embed_model and proj.embed_model != embedding.DEFAULT_MODEL:
+        import sys
+        sys.stderr.write(
+            f"[steelg8] embedding model 不一致 · 索引时={proj.embed_model} "
+            f"· 当前={embedding.DEFAULT_MODEL}。该项目的 RAG 召回已停用，"
+            f"请重新索引。\n"
+        )
         return []
 
     try:
-        q_vec = embedding.embed_one(query, registry)
-    except embedding.EmbeddingError:
+        q_vec = embedding.embed_one(query, registry, timeout=query_timeout)
+    except embedding.EmbeddingError as exc:
+        import sys
+        sys.stderr.write(f"[steelg8] query embedding 失败: {exc}\n")
         return []
 
-    hits = vectordb.search(project_id, q_vec, top_k=top_k)
-    return [h for h in hits if h.score >= min_score]
+    coarse = vectordb.search(project_id, q_vec, top_k=max(coarse_k, top_k))
+    if not coarse:
+        return []
+
+    if use_rerank and len(coarse) > 1:
+        try:
+            pairs = rerank.rerank(
+                query,
+                [h.text for h in coarse],
+                registry,
+                top_n=top_k,
+            )
+            if pairs:
+                reranked: list[vectordb.Hit] = []
+                for idx, score in pairs:
+                    if 0 <= idx < len(coarse):
+                        h = coarse[idx]
+                        reranked.append(
+                            vectordb.Hit(
+                                rel_path=h.rel_path,
+                                chunk_idx=h.chunk_idx,
+                                text=h.text,
+                                score=round(score, 4),
+                            )
+                        )
+                return [h for h in reranked[:top_k] if h.score >= min_score]
+        except rerank.RerankError as exc:
+            import sys
+            sys.stderr.write(
+                f"[steelg8] rerank 失败，回退到 embedding 粗排: {exc}\n"
+            )
+
+    return [h for h in coarse[:top_k] if h.score >= min_score]
 
 
 def active_project_summary() -> dict[str, Any] | None:

@@ -51,6 +51,7 @@ class ProjectRow:
     created_at: str
     indexed_at: str | None
     embed_dims: int
+    embed_model: str
     chunk_count: int
 
 
@@ -81,7 +82,8 @@ def init() -> None:
                 name         TEXT NOT NULL,
                 created_at   TEXT NOT NULL,
                 indexed_at   TEXT,
-                embed_dims   INTEGER DEFAULT 1024
+                embed_dims   INTEGER DEFAULT 1024,
+                embed_model  TEXT DEFAULT ''
             );
             CREATE TABLE IF NOT EXISTS chunks (
                 id           INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -97,6 +99,10 @@ def init() -> None:
             CREATE INDEX IF NOT EXISTS idx_chunks_project ON chunks(project_id);
             CREATE INDEX IF NOT EXISTS idx_chunks_path ON chunks(project_id, rel_path);
         """)
+        # 老库迁移：给 project 表补 embed_model 列
+        cols = [r["name"] for r in conn.execute("PRAGMA table_info(project)").fetchall()]
+        if "embed_model" not in cols:
+            conn.execute("ALTER TABLE project ADD COLUMN embed_model TEXT DEFAULT ''")
         conn.commit()
 
 
@@ -138,17 +144,25 @@ def get_project(path: str) -> ProjectRow | None:
         created_at=row["created_at"],
         indexed_at=row["indexed_at"],
         embed_dims=row["embed_dims"],
+        embed_model=row["embed_model"] or "",
         chunk_count=row["chunk_count"] or 0,
     )
 
 
-def mark_indexed(project_id: int) -> None:
+def mark_indexed(project_id: int, embed_model: str = "") -> None:
+    """标记索引完成，同时钉上用的 embedding 模型名，用于后续 query 校验。"""
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
     with _LOCK, _connect() as conn:
-        conn.execute(
-            "UPDATE project SET indexed_at = ? WHERE id = ?",
-            (now, project_id),
-        )
+        if embed_model:
+            conn.execute(
+                "UPDATE project SET indexed_at = ?, embed_model = ? WHERE id = ?",
+                (now, embed_model, project_id),
+            )
+        else:
+            conn.execute(
+                "UPDATE project SET indexed_at = ? WHERE id = ?",
+                (now, project_id),
+            )
         conn.commit()
 
 
@@ -165,7 +179,9 @@ def list_projects() -> list[ProjectRow]:
         ProjectRow(
             id=r["id"], path=r["path"], name=r["name"],
             created_at=r["created_at"], indexed_at=r["indexed_at"],
-            embed_dims=r["embed_dims"], chunk_count=r["chunk_count"] or 0,
+            embed_dims=r["embed_dims"],
+            embed_model=r["embed_model"] if "embed_model" in r.keys() else "",
+            chunk_count=r["chunk_count"] or 0,
         )
         for r in rows
     ]
