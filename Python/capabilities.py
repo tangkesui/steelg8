@@ -94,7 +94,7 @@ PROFILES: tuple[ModelProfile, ...] = (
     # --- Qwen ---
     ModelProfile(
         model="qwen-max",
-        provider="qwen",
+        provider="bailian",
         chinese_writing=4,
         english_writing=3,
         reasoning=4,
@@ -104,7 +104,7 @@ PROFILES: tuple[ModelProfile, ...] = (
     ),
     ModelProfile(
         model="qwen-plus",
-        provider="qwen",
+        provider="bailian",
         chinese_writing=3,
         english_writing=3,
         reasoning=3,
@@ -115,7 +115,7 @@ PROFILES: tuple[ModelProfile, ...] = (
     ),
     ModelProfile(
         model="qwen-turbo",
-        provider="qwen",
+        provider="bailian",
         chinese_writing=3,
         english_writing=2,
         reasoning=2,

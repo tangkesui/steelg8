@@ -32,9 +32,28 @@ struct SettingsView: View {
     private var sidebar: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
-                Text("Providers")
+                Text("供应商")
                     .font(.headline)
                 Spacer()
+                Menu {
+                    ForEach(ProviderCatalog.all, id: \.id) { preset in
+                        Button {
+                            viewModel.addProviderFromPreset(preset)
+                        } label: {
+                            Text("\(preset.name)")
+                        }
+                        .disabled(viewModel.hasProvider(id: preset.id))
+                    }
+                    Divider()
+                    Button("自定义（空模板）…") {
+                        viewModel.addProviderFromPreset(nil)
+                    }
+                } label: {
+                    Image(systemName: "plus.circle")
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .help("添加一个供应商：从市场里挑一个，或加空模板自己填。")
             }
             .padding(.horizontal, 16)
             .padding(.top, 16)
@@ -46,10 +65,15 @@ struct SettingsView: View {
                         Circle()
                             .fill(entry.isConfigured ? Color.green : Color.gray.opacity(0.35))
                             .frame(width: 8, height: 8)
-                        Text(entry.name.capitalized)
+                        Text(displayName(for: entry.name))
                         Spacer()
                     }
                     .tag(entry.id)
+                    .contextMenu {
+                        Button("删除") {
+                            viewModel.removeProvider(name: entry.name)
+                        }
+                    }
                 }
             }
             .listStyle(.sidebar)
@@ -159,14 +183,34 @@ struct SettingsView: View {
     private func header(for entry: ProviderEntry) -> some View {
         HStack {
             VStack(alignment: .leading, spacing: 4) {
-                Text(entry.name.capitalized)
+                Text(displayName(for: entry.name))
                     .font(.title3.bold())
-                Text(entry.isConfigured ? "配置完整" : "缺少 API Key 或 base URL")
-                    .font(.caption)
-                    .foregroundStyle(entry.isConfigured ? .green : .orange)
+                HStack(spacing: 8) {
+                    Text(entry.isConfigured ? "配置完整" : "缺少 API Key 或 base URL")
+                        .font(.caption)
+                        .foregroundStyle(entry.isConfigured ? .green : .orange)
+                    if let preset = ProviderCatalog.preset(by: entry.name),
+                       let url = URL(string: preset.signupURL) {
+                        Link("去官网申请 key ↗", destination: url)
+                            .font(.caption)
+                    }
+                }
+                if let preset = ProviderCatalog.preset(by: entry.name) {
+                    Text(preset.blurb)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .padding(.top, 2)
+                }
             }
             Spacer()
         }
+    }
+
+    private func displayName(for raw: String) -> String {
+        if let preset = ProviderCatalog.preset(by: raw) {
+            return preset.name
+        }
+        return raw.capitalized
     }
 
     /// 模型列表，用 row.id（稳定 UUID）做 ForEach 的 identity，避免
@@ -338,6 +382,48 @@ final class SettingsViewModel: ObservableObject {
     func appendModelRow(providerIndex: Int) {
         guard entries.indices.contains(providerIndex) else { return }
         entries[providerIndex].modelRows.append(ModelRow(""))
+    }
+
+    // MARK: - 供应商增删
+
+    func hasProvider(id: String) -> Bool {
+        entries.contains { $0.name.lowercased() == id.lowercased() }
+    }
+
+    /// 从 preset 插入一条；preset=nil 表示空模板，用户自己填名字。
+    func addProviderFromPreset(_ preset: ProviderCatalog.Preset?) {
+        if let preset {
+            if hasProvider(id: preset.id) { return }
+            let entry = ProviderEntry(
+                name: preset.id,
+                baseURL: preset.baseURL,
+                apiKeyEnv: preset.apiKeyEnv,
+                apiKey: "",
+                models: preset.defaultModels
+            )
+            entries.append(entry)
+            selectedProviderName = entry.id
+        } else {
+            // 空模板：找一个没撞名的 custom-N
+            var i = 1
+            while hasProvider(id: "custom-\(i)") { i += 1 }
+            let entry = ProviderEntry(
+                name: "custom-\(i)",
+                baseURL: "",
+                apiKeyEnv: "",
+                apiKey: "",
+                models: []
+            )
+            entries.append(entry)
+            selectedProviderName = entry.id
+        }
+    }
+
+    func removeProvider(name: String) {
+        entries.removeAll { $0.name == name }
+        if selectedProviderName == name {
+            selectedProviderName = entries.first?.id
+        }
     }
 
     func appendModel(providerIndex: Int, modelID: String) {

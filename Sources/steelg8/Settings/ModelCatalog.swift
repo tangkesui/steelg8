@@ -26,16 +26,26 @@ enum ModelCatalog {
 
     static func suggestions(for providerName: String) -> [Suggestion] {
         switch providerName.lowercased() {
-        case "kimi":
+        case "kimi", "moonshot":
             return kimi
         case "deepseek":
             return deepseek
-        case "qwen":
-            return qwen
+        case "bailian", "qwen", "dashscope":
+            return bailian
         case "openrouter":
             return openrouter
-        case "zhipu", "glm":
+        case "zhipu", "glm", "bigmodel":
             return zhipu
+        case "doubao", "volcengine", "volcano":
+            return doubao
+        case "minimax":
+            return minimax
+        case "stepfun", "step":
+            return stepfun
+        case "yi", "01", "01ai", "lingyiwanwu":
+            return yi
+        case "siliconflow":
+            return siliconflow
         default:
             return []
         }
@@ -58,14 +68,61 @@ enum ModelCatalog {
         .init("deepseek-reasoner", hint: "推理模型 R1")
     ]
 
-    // MARK: - Qwen (阿里百炼)
+    // MARK: - 阿里百炼（Bailian，DashScope 平台，承载 Qwen 系列 + embedding + rerank）
 
-    private static let qwen: [Suggestion] = [
-        .init("qwen3-max", hint: "最新旗舰"),
+    private static let bailian: [Suggestion] = [
+        .init("qwen3-max", hint: "Qwen 最新旗舰"),
         .init("qwen-max", hint: "中文文案主力"),
         .init("qwen-plus", hint: "路由分拣主力"),
         .init("qwen-turbo", hint: "批量小任务"),
-        .init("qwen-long", hint: "长上下文专版")
+        .init("qwen-long", hint: "长上下文专版"),
+        .init("qwen3-coder-plus", hint: "代码生成"),
+        .init("text-embedding-v3", hint: "embedding，¥0.7/M，500K 免费"),
+        .init("text-embedding-v4", hint: "embedding v4（部分账号可见）"),
+        .init("qwen3-rerank", hint: "rerank，1M 免费")
+    ]
+
+    // MARK: - 字节跳动 · 火山引擎 · 豆包
+
+    private static let doubao: [Suggestion] = [
+        .init("doubao-seed-1-6-250615", label: "doubao-seed-1.6", hint: "最新，通用"),
+        .init("doubao-seed-1-6-flash-250615", label: "doubao-seed-1.6 flash", hint: "便宜快"),
+        .init("doubao-1-5-pro-32k-250115", label: "doubao-1.5 pro 32k", hint: "稳定主力"),
+        .init("doubao-1-5-pro-256k-250115", label: "doubao-1.5 pro 256k", hint: "长上下文"),
+        .init("doubao-embedding-text-240715", label: "doubao embedding", hint: "embedding")
+    ]
+
+    // MARK: - MiniMax
+
+    private static let minimax: [Suggestion] = [
+        .init("MiniMax-M2", hint: "最新"),
+        .init("abab7-chat-preview"),
+        .init("abab6.5s-chat")
+    ]
+
+    // MARK: - 阶跃星辰
+
+    private static let stepfun: [Suggestion] = [
+        .init("step-2-16k", hint: "通用主力"),
+        .init("step-2-mini", hint: "便宜"),
+        .init("step-1v-8k", hint: "多模态")
+    ]
+
+    // MARK: - 零一万物（01.AI）
+
+    private static let yi: [Suggestion] = [
+        .init("yi-lightning", hint: "极便宜快"),
+        .init("yi-large", hint: "综合"),
+        .init("yi-vision")
+    ]
+
+    // MARK: - 硅基流动（SiliconFlow） —— 大量开源模型聚合
+
+    private static let siliconflow: [Suggestion] = [
+        .init("Qwen/Qwen3-32B", hint: "开源通用"),
+        .init("deepseek-ai/DeepSeek-V3"),
+        .init("meta-llama/Meta-Llama-3.1-70B-Instruct"),
+        .init("BAAI/bge-m3", hint: "embedding 开源")
     ]
 
     // MARK: - OpenRouter Top N

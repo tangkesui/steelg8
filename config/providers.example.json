@@ -20,14 +20,15 @@
         "deepseek-reasoner"
       ]
     },
-    "qwen": {
+    "bailian": {
       "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-      "api_key_env": "QWEN_API_KEY",
+      "api_key_env": "BAILIAN_API_KEY",
       "models": [
         "qwen-plus",
         "qwen-max",
         "qwen-turbo",
-        "qwen-long"
+        "qwen-long",
+        "text-embedding-v3"
       ]
     },
     "openrouter": {

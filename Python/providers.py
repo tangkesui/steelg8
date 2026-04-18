@@ -142,6 +142,22 @@ class ProviderRegistry:
 def _load_providers_from_json(path: Path) -> ProviderRegistry:
     raw = json.loads(path.read_text(encoding="utf-8"))
     providers_raw = raw.get("providers", {})
+
+    # 2026-04 迁移：把历史 provider 键 "qwen" 重命名为 "bailian"
+    # （百炼是平台，Qwen 是模型家族；原来命名混了两个层级）。
+    # 只在 "bailian" 不存在时才迁移，避免覆盖用户手动配置。
+    if "qwen" in providers_raw and "bailian" not in providers_raw:
+        providers_raw["bailian"] = providers_raw.pop("qwen")
+        raw["providers"] = providers_raw
+        try:
+            path.write_text(
+                json.dumps(raw, ensure_ascii=False, indent=2, sort_keys=True),
+                encoding="utf-8",
+            )
+            path.chmod(0o600)
+        except OSError:
+            pass
+
     providers: dict[str, Provider] = {}
     for name, cfg in providers_raw.items():
         base_url = str(cfg.get("base_url", "")).rstrip("/")

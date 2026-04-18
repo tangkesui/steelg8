@@ -45,11 +45,14 @@ class EmbeddingResult:
     model: str
 
 
-def _pick_qwen(registry: ProviderRegistry):
-    """从 registry 里找 qwen provider。"""
-    prov = registry.providers.get("qwen")
-    if prov and prov.is_ready():
-        return prov
+def _pick_bailian(registry: ProviderRegistry):
+    """从 registry 里找百炼 provider。
+    先 'bailian'，再向后兼容老命名 'qwen'。
+    """
+    for name in ("bailian", "qwen"):
+        prov = registry.providers.get(name)
+        if prov and prov.is_ready():
+            return prov
     return None
 
 
@@ -65,12 +68,12 @@ def embed(
     if not texts:
         return EmbeddingResult(vectors=[], usage={}, model=model)
 
-    provider = _pick_qwen(registry)
+    provider = _pick_bailian(registry)
     if provider is None:
         raise EmbeddingError(
-            "没有就绪的 qwen provider。Phase 2 项目索引需要 Qwen Embedding（"
-            f"{DEFAULT_MODEL}）。去 Settings 给 qwen 填 DashScope API Key，"
-            "base_url 默认填好是 https://dashscope.aliyuncs.com/compatible-mode/v1"
+            "没有就绪的 bailian provider。项目索引需要阿里云百炼 Embedding（"
+            f"{DEFAULT_MODEL}）。去 Settings 给 bailian 填 DashScope API Key，"
+            "base_url 默认是 https://dashscope.aliyuncs.com/compatible-mode/v1"
         )
 
     all_vectors: list[list[float]] = []
