@@ -52,6 +52,7 @@ struct ChatWebView: NSViewRepresentable {
         webView.setValue(false, forKey: "drawsBackground") // 让 SwiftUI 的背景色透出来
         webView.allowsLinkPreview = false
         webView.allowsBackForwardNavigationGestures = false
+        webView.uiDelegate = context.coordinator   // 让 JS 的 alert/confirm/prompt 能弹出原生面板
 
         if #available(macOS 13.3, *) {
             webView.isInspectable = true
@@ -114,8 +115,58 @@ struct ChatWebView: NSViewRepresentable {
         return url
     }
 
-    /// JS→Swift 消息派发
-    final class Coordinator: NSObject, WKScriptMessageHandler {
+    /// JS→Swift 消息派发（+ UIDelegate 让 alert/confirm/prompt 能弹出来）
+    final class Coordinator: NSObject, WKScriptMessageHandler, WKUIDelegate {
+
+        // MARK: - WKUIDelegate: JS 对话框
+        func webView(
+            _ webView: WKWebView,
+            runJavaScriptAlertPanelWithMessage message: String,
+            initiatedByFrame frame: WKFrameInfo,
+            completionHandler: @escaping () -> Void
+        ) {
+            let alert = NSAlert()
+            alert.messageText = "steelg8"
+            alert.informativeText = message
+            alert.addButton(withTitle: "好")
+            alert.runModal()
+            completionHandler()
+        }
+
+        func webView(
+            _ webView: WKWebView,
+            runJavaScriptConfirmPanelWithMessage message: String,
+            initiatedByFrame frame: WKFrameInfo,
+            completionHandler: @escaping (Bool) -> Void
+        ) {
+            let alert = NSAlert()
+            alert.messageText = "steelg8"
+            alert.informativeText = message
+            alert.addButton(withTitle: "确认")
+            alert.addButton(withTitle: "取消")
+            let resp = alert.runModal()
+            completionHandler(resp == .alertFirstButtonReturn)
+        }
+
+        func webView(
+            _ webView: WKWebView,
+            runJavaScriptTextInputPanelWithPrompt prompt: String,
+            defaultText: String?,
+            initiatedByFrame frame: WKFrameInfo,
+            completionHandler: @escaping (String?) -> Void
+        ) {
+            let alert = NSAlert()
+            alert.messageText = "steelg8"
+            alert.informativeText = prompt
+            let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 280, height: 22))
+            field.stringValue = defaultText ?? ""
+            alert.accessoryView = field
+            alert.addButton(withTitle: "确认")
+            alert.addButton(withTitle: "取消")
+            let resp = alert.runModal()
+            completionHandler(resp == .alertFirstButtonReturn ? field.stringValue : nil)
+        }
+
         func userContentController(
             _ controller: WKUserContentController,
             didReceive msg: WKScriptMessage

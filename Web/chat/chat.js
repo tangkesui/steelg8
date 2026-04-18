@@ -366,7 +366,8 @@
         saveToNotes(entry);
         break;
       case "delete":
-        if (confirm("删除这条 scratch？")) deleteScratch(id);
+        // scratch 单击直接删（误删了再加一条即可；别烦用户弹框）
+        deleteScratch(id);
         break;
     }
   }
