@@ -71,6 +71,29 @@ html, body {
 
 .controls { display: flex; align-items: center; gap: 12px; -webkit-app-region: no-drag; }
 
+.usage-pill {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  padding: 4px 10px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  cursor: default;
+  user-select: none;
+}
+.usage-pill .usage-main {
+  color: var(--accent);
+  font-weight: 600;
+}
+.usage-pill .usage-sub {
+  color: var(--text-muted);
+  font-size: 10.5px;
+}
+.usage-pill:hover { border-color: var(--accent); }
+
 .model-label {
   display: flex;
   align-items: center;
@@ -166,6 +189,10 @@ button#reload-providers:hover { color: var(--text); border-color: var(--accent);
   font-size: 11px;
   color: var(--text-muted);
   margin-top: 4px;
+  font-family: var(--font-mono);
+}
+.message .meta .cost {
+  color: var(--accent);
 }
 
 /* ---------- markdown inside bubble ---------- */

@@ -31,6 +31,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from providers import load_registry, Provider, ProviderRegistry  # noqa: E402
 import router  # noqa: E402
 import agent  # noqa: E402
+import usage  # noqa: E402
 
 
 def app_root() -> Path:
@@ -164,6 +165,14 @@ class SteelG8Handler(BaseHTTPRequestHandler):
             )
             return
 
+        if self.path == "/usage/summary":
+            self.respond(200, usage.summary())
+            return
+
+        if self.path == "/usage/recent":
+            self.respond(200, {"items": usage.recent(limit=100)})
+            return
+
         if self.path == "/capabilities":
             # 画像表快照，前端可用来展示模型能力
             import capabilities as caps
@@ -243,6 +252,15 @@ class SteelG8Handler(BaseHTTPRequestHandler):
             self._stream_response(req.message, context, provider, decision)
         else:
             result = agent.run_once(req.message, context, provider, decision)
+            # 写 usage log（非 mock 且有 usage 的时候记一条；mock 不计费）
+            if result.source.startswith("provider:") and result.usage:
+                usage.record(
+                    model=result.decision.model,
+                    provider=result.decision.provider,
+                    layer=result.decision.layer,
+                    prompt_tokens=result.usage.get("prompt_tokens", 0),
+                    completion_tokens=result.usage.get("completion_tokens", 0),
+                )
             payload = result.to_dict()
             payload["soulSummary"] = soul_summary(soul_text)
             self.respond(200, payload)
@@ -270,12 +288,33 @@ class SteelG8Handler(BaseHTTPRequestHandler):
             except (BrokenPipeError, ConnectionResetError):
                 raise
 
+        captured_usage: dict[str, int] | None = None
+        captured_model: str | None = None
         try:
             for event in agent.run_stream(message, context, provider, decision):
+                # 捕获 usage 事件用于写 log（event 本身正常下发给前端）
+                if event.get("type") == "usage":
+                    captured_usage = event.get("usage")
+                    captured_model = event.get("model")
                 write_event(event)
         except (BrokenPipeError, ConnectionResetError):
             # 客户端断开，不是错误
             return
+
+        # 流结束后写 usage log（mock 走 layer==mock，不记账）
+        if (
+            provider is not None
+            and decision.layer != "mock"
+            and captured_usage
+            and (captured_usage.get("prompt_tokens") or captured_usage.get("completion_tokens"))
+        ):
+            usage.record(
+                model=captured_model or decision.model,
+                provider=decision.provider,
+                layer=decision.layer,
+                prompt_tokens=captured_usage.get("prompt_tokens", 0),
+                completion_tokens=captured_usage.get("completion_tokens", 0),
+            )
 
     # ------------------- io utilities -------------------
 

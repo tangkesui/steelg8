@@ -2,19 +2,16 @@
 steelg8 轻量 agent loop
 ------------------------
 
-MVP 阶段不 Fork Hermes（ADR: 决定自写），在这里维护一个最小的：
+- 消息历史 / 系统 prompt 拼装
+- 上游 OpenAI 兼容 HTTP，流式 + 非流式都支持
+- 上游返回的 `usage` 字段会顺便带回（供 usage.py 记账）
 
-- 消息历史（system / user / assistant）
-- 工具调用钩子（Phase 2 再接 docx 模板填充等 skill）
-- 流式输出（通过 generator yield chunk）
-
-设计哲学：
-- **接口稳**：对外就一个 run_stream() / run_once()，后续替换底层不影响 server.py
-- **不绑协议**：上游 API 调用屏蔽在 _chat_stream 里，走 OpenAI 兼容 HTTP
-- **可降级**：任何一步失败都能优雅降级到 mock 回复，别让 UI 卡死
-
-L1 soul 注入 + L2/L3 记忆层在这里拼 system prompt；实际 L2/L3 文件读取
-由 server.py 按需加载后传进来，保持 agent.py 无 I/O 依赖便于单测。
+流式协议（SSE event dict）：
+  {"type": "meta",  "decision": {...}}
+  {"type": "delta", "content": "部分文本"}
+  {"type": "usage", "usage": {prompt_tokens, completion_tokens, total_tokens}, "cost_usd": ...}
+  {"type": "done",  "full": "完整文本", "source": "provider:kimi"}
+  {"type": "error", "error": "..."}
 """
 
 from __future__ import annotations
@@ -26,11 +23,12 @@ from urllib import request, error
 
 from providers import Provider
 from router import RoutingDecision
+import pricing
 
 
 @dataclass
 class ChatMessage:
-    role: str  # "system" | "user" | "assistant" | "tool"
+    role: str
     content: str
     name: str | None = None
 
@@ -43,11 +41,8 @@ class ChatMessage:
 
 @dataclass
 class AgentContext:
-    """单次对话的运行上下文——系统 prompt、历史、工具列表等。"""
-
     system_prompt: str = ""
     history: list[ChatMessage] = field(default_factory=list)
-    # Phase 2 再填：工具定义、skill registry、记忆层快照
     tools: list[dict[str, Any]] = field(default_factory=list)
 
     def build_messages(self, user_message: str) -> list[dict[str, Any]]:
@@ -65,7 +60,9 @@ class AgentResult:
     content: str
     decision: RoutingDecision
     error: str | None = None
-    source: str = ""  # "provider:kimi" / "mock-fallback" / ...
+    source: str = ""
+    usage: dict[str, int] | None = None  # {prompt_tokens, completion_tokens, total_tokens}
+    cost_usd: float = 0.0
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -76,10 +73,12 @@ class AgentResult:
             "routingReason": self.decision.reason,
             "source": self.source,
             "error": self.error,
+            "usage": self.usage,
+            "costUsd": round(self.cost_usd, 8),
         }
 
 
-# ---------- 非流式（/chat 普通响应） ----------
+# ---------- 非流式 ----------
 
 
 def run_once(
@@ -91,8 +90,6 @@ def run_once(
     temperature: float = 0.4,
     timeout: int = 30,
 ) -> AgentResult:
-    """对上游发一次完整请求，返回 AgentResult。provider 为 None 时走 mock。"""
-
     if provider is None or decision.layer == "mock":
         return AgentResult(
             content=_mock_content(user_message, decision),
@@ -129,7 +126,14 @@ def run_once(
         .strip()
     )
     resolved_model = body.get("model") or payload["model"]
-    # 如果上游返回了更精确的 model id，就更新 decision（对调试友好）
+    usage = _extract_usage(body.get("usage"))
+    cost = pricing.cost_usd(
+        resolved_model,
+        provider.name,
+        usage.get("prompt_tokens", 0) if usage else 0,
+        usage.get("completion_tokens", 0) if usage else 0,
+    )
+
     final_decision = RoutingDecision(
         model=resolved_model,
         provider=decision.provider,
@@ -140,10 +144,12 @@ def run_once(
         content=content or "上游返回了空响应。",
         decision=final_decision,
         source=f"provider:{provider.name}",
+        usage=usage,
+        cost_usd=cost,
     )
 
 
-# ---------- 流式（/chat SSE 响应） ----------
+# ---------- 流式 ----------
 
 
 def run_stream(
@@ -155,23 +161,17 @@ def run_stream(
     temperature: float = 0.4,
     timeout: int = 60,
 ) -> Iterator[dict[str, Any]]:
-    """以 event dict 形式流式 yield。每个 dict 形如：
-
-    - {"type": "meta", "decision": {...}}
-    - {"type": "delta", "content": "部分文本"}
-    - {"type": "done", "full": "完整文本", "source": "provider:kimi"}
-    - {"type": "error", "error": "..."}
-
-    server.py 会把每个 dict 转成一行 SSE 发给 WebView。
-    """
-
     yield {"type": "meta", "decision": decision.to_dict()}
 
     if provider is None or decision.layer == "mock":
         full = _mock_content(user_message, decision)
-        # 把 mock 也切成假 chunk，保证前端流式逻辑一致
         for chunk in _fake_stream_chunks(full):
             yield {"type": "delta", "content": chunk}
+        yield {
+            "type": "usage",
+            "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+            "costUsd": 0.0,
+        }
         yield {"type": "done", "full": full, "source": "mock-fallback"}
         return
 
@@ -180,32 +180,67 @@ def run_stream(
         "messages": context.build_messages(user_message),
         "temperature": temperature,
         "stream": True,
+        # OpenAI-compat：要 usage 必须显式请求；OpenRouter/DeepSeek/Qwen/Kimi 都认
+        "stream_options": {"include_usage": True},
     }
 
     buffered: list[str] = []
+    final_usage: dict[str, int] | None = None
+    resolved_model: str | None = None
+
     try:
-        for chunk_text in _post_sse(
+        for chunk in _post_sse(
             f"{provider.base_url}/chat/completions",
             payload,
             api_key=provider.api_key(),
             timeout=timeout,
         ):
-            if not chunk_text:
-                continue
-            buffered.append(chunk_text)
-            yield {"type": "delta", "content": chunk_text}
+            # _post_sse yield 结构：{"delta":..., "usage":..., "model":...}
+            if chunk.get("model") and not resolved_model:
+                resolved_model = chunk["model"]
+            if chunk.get("delta"):
+                text = chunk["delta"]
+                buffered.append(text)
+                yield {"type": "delta", "content": text}
+            if chunk.get("usage"):
+                final_usage = _extract_usage(chunk["usage"])
     except Exception as exc:  # noqa: BLE001
         yield {"type": "error", "error": str(exc)}
-        # 流失败时补个 mock tail，前端才能收尾
         tail = _mock_content(user_message, decision, error=str(exc))
         yield {"type": "delta", "content": f"\n\n[stream 失败，降级 mock] {tail}"}
         yield {"type": "done", "full": "".join(buffered) + f"\n\n{tail}", "source": "mock-fallback"}
         return
 
-    yield {"type": "done", "full": "".join(buffered), "source": f"provider:{provider.name}"}
+    # usage 事件放在 done 之前，前端收到后可以即时更新金额
+    model_id = resolved_model or payload["model"]
+    prompt_tk = final_usage.get("prompt_tokens", 0) if final_usage else 0
+    comp_tk = final_usage.get("completion_tokens", 0) if final_usage else 0
+    cost = pricing.cost_usd(model_id, provider.name, prompt_tk, comp_tk)
+
+    yield {
+        "type": "usage",
+        "usage": final_usage or {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+        "costUsd": round(cost, 8),
+        "model": model_id,
+    }
+
+    yield {
+        "type": "done",
+        "full": "".join(buffered),
+        "source": f"provider:{provider.name}",
+    }
 
 
 # ---------- helpers ----------
+
+
+def _extract_usage(raw: Any) -> dict[str, int] | None:
+    if not isinstance(raw, dict):
+        return None
+    prompt = int(raw.get("prompt_tokens") or 0)
+    completion = int(raw.get("completion_tokens") or 0)
+    total = int(raw.get("total_tokens") or (prompt + completion))
+    return {"prompt_tokens": prompt, "completion_tokens": completion, "total_tokens": total}
 
 
 def _post_json(url: str, payload: dict[str, Any], *, api_key: str, timeout: int) -> dict[str, Any]:
@@ -228,9 +263,13 @@ def _post_sse(
     *,
     api_key: str,
     timeout: int,
-) -> Iterator[str]:
-    """拉 OpenAI 兼容的 `data: {...}` SSE 流，yield 每个 delta 的 content。"""
+) -> Iterator[dict[str, Any]]:
+    """拉上游 SSE，yield 结构化事件：
+      {"delta": "...", "usage": None, "model": None}
+      {"delta": None, "usage": {...}, "model": "xxx"}
 
+    合并了 chunk 级 content 与最终 usage chunk，让调用方不必懂 SSE 细节。
+    """
     req = request.Request(
         url,
         data=json.dumps(payload).encode("utf-8"),
@@ -265,13 +304,20 @@ def _post_sse(
                 evt = json.loads(data_part)
             except json.JSONDecodeError:
                 continue
+
+            out: dict[str, Any] = {}
+            if "model" in evt and evt["model"]:
+                out["model"] = evt["model"]
             choices = evt.get("choices") or []
-            if not choices:
-                continue
-            delta = choices[0].get("delta") or {}
-            content = delta.get("content")
-            if content:
-                yield content
+            if choices:
+                delta = choices[0].get("delta") or {}
+                content = delta.get("content")
+                if content:
+                    out["delta"] = content
+            if evt.get("usage"):
+                out["usage"] = evt["usage"]
+            if out:
+                yield out
     finally:
         resp.close()
 

@@ -41,6 +41,7 @@
     dot: $("health-dot"),
     routing: $("routing-hint"),
     error: $("error-hint"),
+    usagePill: $("usage-pill"),
   };
 
   /** 对话历史（不含当前 turn） */
@@ -67,6 +68,53 @@
     UI.dot.classList.add("dot-off");
     UI.dot.title = "内核未就绪";
     return null;
+  }
+
+  async function refreshUsagePill() {
+    if (!UI.usagePill) return;
+    try {
+      const r = await fetch(`${API_BASE}/usage/summary`, { cache: "no-store" });
+      if (!r.ok) return;
+      const j = await r.json();
+      const s = j.session || {};
+      const today = j.today || {};
+      const mainEl = UI.usagePill.querySelector(".usage-main");
+      const subEl = UI.usagePill.querySelector(".usage-sub");
+      if (mainEl) mainEl.textContent = `$${Number(s.cost_usd || 0).toFixed(4)}`;
+      if (subEl) {
+        const tk = (s.total || 0);
+        subEl.textContent = `· ${formatTokens(tk)} · 今 $${Number(today.cost_usd || 0).toFixed(2)}`;
+      }
+      const cny = (j.usdToCny || 7.2);
+      const title = [
+        `本次会话：$${Number(s.cost_usd || 0).toFixed(6)}  （≈ ¥${(
+          Number(s.cost_usd || 0) * cny
+        ).toFixed(4)}）`,
+        `  ${s.total || 0} tokens · ${s.calls || 0} 次调用`,
+        ``,
+        `今日：$${Number(today.cost_usd || 0).toFixed(4)}  （≈ ¥${(
+          Number(today.cost_usd || 0) * cny
+        ).toFixed(2)}）`,
+        `  ${today.total || 0} tokens · ${today.calls || 0} 次调用`,
+      ];
+      if (j.sessionBreakdown && j.sessionBreakdown.length) {
+        title.push("");
+        title.push("本次会话按模型拆分：");
+        j.sessionBreakdown.slice(0, 5).forEach((b) => {
+          title.push(
+            `  · ${b.model} → ${b.calls} 次, ${b.prompt + b.completion} tok, $${Number(b.cost_usd).toFixed(6)}`
+          );
+        });
+      }
+      UI.usagePill.title = title.join("\n");
+    } catch (_) {}
+  }
+
+  function formatTokens(n) {
+    n = Number(n || 0);
+    if (n < 1000) return `${n} tok`;
+    if (n < 1_000_000) return `${(n / 1000).toFixed(1)}k`;
+    return `${(n / 1_000_000).toFixed(2)}M`;
   }
 
   async function refreshProviders() {
@@ -230,6 +278,27 @@
             } else if (evt.type === "delta") {
               activeFullBuffer += evt.content || "";
               updateStreamingAssistant(bubble, activeFullBuffer);
+            } else if (evt.type === "usage") {
+              // 每次 assistant 收尾前到一条 usage，挂到当前气泡的 meta
+              const u = evt.usage || {};
+              const cost = Number(evt.costUsd || 0);
+              const pieces = [];
+              if (lastDecision) {
+                pieces.push(`${lastDecision.provider || "?"}/${lastDecision.model || "?"}`);
+              }
+              if (u.prompt_tokens || u.completion_tokens) {
+                pieces.push(
+                  `${u.prompt_tokens || 0} in / ${u.completion_tokens || 0} out`
+                );
+              }
+              if (cost > 0) {
+                pieces.push(`<span class="cost">$${cost.toFixed(6)}</span>`);
+              } else if (cost === 0 && (u.prompt_tokens || u.completion_tokens)) {
+                pieces.push(`<span class="cost">free</span>`);
+              }
+              metaEl.innerHTML = pieces.join(" · ");
+              // 刷新 header pill
+              refreshUsagePill();
             } else if (evt.type === "error") {
               setErrorHint(`上游错误：${evt.error}`);
             } else if (evt.type === "done") {
@@ -319,7 +388,9 @@
   (async function init() {
     await refreshHealth();
     await refreshProviders();
-    // 每 8 秒 ping 一次 health
+    await refreshUsagePill();
+    // 每 8 秒 ping 一次 health，每 15 秒刷 usage
     setInterval(refreshHealth, 8000);
+    setInterval(refreshUsagePill, 15000);
   })();
 })();
