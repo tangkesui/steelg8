@@ -1,12 +1,15 @@
 """
-Embedding 封装：当前只支持 Qwen text-embedding-v3（通过 DashScope OpenAI 兼容模式）。
+Embedding 封装：当前只支持阿里云百炼（DashScope）Qwen Embedding 系列，
+通过 OpenAI 兼容模式调用。
 
-后续加 Jina / OpenAI 只需要扩 providers 映射。
+默认走 **text-embedding-v4**（Qwen3-Embedding 系列）：
+- 最大 dimensions 2048，这里默认 1024（精度够 + 存储砍半）
+- 批大小 10（每次 input ≤10 条）
+- 单条最长 8192 token
+- 价格 ¥0.5/M token（比 v3 便宜 30%）
+- 过渡期 v3 仅限免费额度；新项目直接用 v4
 
-Qwen text-embedding-v3：
-- 官方推荐 dimensions=1024（也支持 768/512，权衡精度和存储）
-- 单次请求最多 25 条 input
-- 按字符数计费，人民币极便宜
+可通过环境变量 `STEELG8_EMBED_MODEL` 覆盖（v4 / v3 / v2）。
 
 返回：list[list[float]]，每条对应 input 中一条文本的 embedding 向量。
 """
@@ -14,6 +17,7 @@ Qwen text-embedding-v3：
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass
 from typing import Any
 from urllib import request, error
@@ -23,9 +27,9 @@ from providers import ProviderRegistry
 
 # ---- 默认配置 ----
 
-DEFAULT_MODEL = "text-embedding-v3"
-DEFAULT_DIMS = 1024
-BATCH_SIZE = 10  # DashScope 推荐每批 ≤10 条
+DEFAULT_MODEL = os.environ.get("STEELG8_EMBED_MODEL", "text-embedding-v4")
+DEFAULT_DIMS = int(os.environ.get("STEELG8_EMBED_DIMS", "1024"))
+BATCH_SIZE = 10  # DashScope v4 推荐每批 ≤10 条
 
 
 class EmbeddingError(RuntimeError):
@@ -62,8 +66,9 @@ def embed(
     provider = _pick_qwen(registry)
     if provider is None:
         raise EmbeddingError(
-            "没有就绪的 qwen provider；Phase 2 索引需要 Qwen Embedding。"
-            "去 Settings 给 qwen 填 DashScope API Key（base_url 默认已填好）"
+            "没有就绪的 qwen provider。Phase 2 项目索引需要 Qwen Embedding（"
+            f"{DEFAULT_MODEL}）。去 Settings 给 qwen 填 DashScope API Key，"
+            "base_url 默认填好是 https://dashscope.aliyuncs.com/compatible-mode/v1"
         )
 
     all_vectors: list[list[float]] = []
