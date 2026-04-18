@@ -413,13 +413,14 @@
       const opts = ['<option value="">自动路由</option>'];
       const defaultModel = j.defaultModel || "";
       (j.providers || []).forEach((p) => {
+        // 未就绪的 provider（没 key）直接跳过 —— 显示了也选不动，徒增噪音
+        if (!p.ready) return;
         const models = p.models || [];
         if (!models.length) return;
-        const disabled = p.ready ? "" : " disabled";
-        opts.push(`<optgroup label="${p.name}${p.ready ? "" : " (未就绪)"}">`);
+        opts.push(`<optgroup label="${p.name}">`);
         models.forEach((m) => {
           const selected = m === defaultModel ? " selected" : "";
-          opts.push(`<option value="${m}"${selected}${disabled}>${m}</option>`);
+          opts.push(`<option value="${m}"${selected}>${m}</option>`);
         });
         opts.push("</optgroup>");
       });
