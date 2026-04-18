@@ -173,6 +173,7 @@ struct SettingsView: View {
     /// 删除时按 index 重入 Binding 触发越界崩溃。
     @ViewBuilder
     private func modelsSection(providerIndex: Int) -> some View {
+        let providerName = viewModel.entries[providerIndex].name
         VStack(alignment: .leading, spacing: 8) {
             ForEach(viewModel.entries[providerIndex].modelRows) { row in
                 HStack {
@@ -206,12 +207,46 @@ struct SettingsView: View {
                 }
             }
 
+            addModelMenu(providerIndex: providerIndex, providerName: providerName)
+        }
+    }
+
+    /// 「添加模型」按钮。有候选清单时出下拉（建议列表 + 手动输入），否则就是一个
+    /// 普通的"追加空白行"按钮。
+    @ViewBuilder
+    private func addModelMenu(providerIndex: Int, providerName: String) -> some View {
+        let suggestions = ModelCatalog.suggestions(for: providerName)
+        if suggestions.isEmpty {
             Button {
                 viewModel.appendModelRow(providerIndex: providerIndex)
             } label: {
                 Label("添加模型", systemImage: "plus.circle")
             }
             .buttonStyle(.borderless)
+        } else {
+            Menu {
+                ForEach(suggestions) { sug in
+                    Button {
+                        viewModel.appendModel(providerIndex: providerIndex, modelID: sug.modelID)
+                    } label: {
+                        if let hint = sug.hint, !hint.isEmpty {
+                            Text("\(sug.label)  —  \(hint)")
+                        } else {
+                            Text(sug.label)
+                        }
+                    }
+                    .disabled(viewModel.hasModel(providerIndex: providerIndex, modelID: sug.modelID))
+                }
+                Divider()
+                Button("手动输入其它 ID…") {
+                    viewModel.appendModelRow(providerIndex: providerIndex)
+                }
+            } label: {
+                Label("添加模型", systemImage: "plus.circle")
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.visible)
+            .fixedSize()
         }
     }
 
@@ -303,6 +338,18 @@ final class SettingsViewModel: ObservableObject {
     func appendModelRow(providerIndex: Int) {
         guard entries.indices.contains(providerIndex) else { return }
         entries[providerIndex].modelRows.append(ModelRow(""))
+    }
+
+    func appendModel(providerIndex: Int, modelID: String) {
+        guard entries.indices.contains(providerIndex) else { return }
+        // 避免重复追加
+        guard !entries[providerIndex].modelRows.contains(where: { $0.value == modelID }) else { return }
+        entries[providerIndex].modelRows.append(ModelRow(modelID))
+    }
+
+    func hasModel(providerIndex: Int, modelID: String) -> Bool {
+        guard entries.indices.contains(providerIndex) else { return false }
+        return entries[providerIndex].modelRows.contains { $0.value == modelID }
     }
 
     func loadIfNeeded() {
