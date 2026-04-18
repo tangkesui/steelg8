@@ -29,6 +29,7 @@ from typing import Any
 
 import embedding
 import extract
+import knowledge as knowledge_mod
 import rerank
 import vectordb
 from providers import ProviderRegistry
@@ -240,28 +241,28 @@ def retrieve(
       4. 按 min_score 过滤
     """
     active = get_active()
-    if not active:
-        return []
-    project_id = active["id"]
+    project_id = active["id"] if active else 0
 
-    # 还在索引中且一条 embedding 都没出来 → 跳过
-    if (
+    # 还在索引中且一条 embedding 都没出来 → 跳过当前项目（但知识库还会查）
+    skip_current = False
+    if active and (
         _STATUS.state == "running"
         and _STATUS.project_id == project_id
         and _STATUS.embedded_chunks == 0
     ):
-        return []
+        skip_current = True
 
-    # 模型一致性校验：索引时用的模型名要和 query 用的一致
-    proj = vectordb.get_project(active["path"])
-    if proj and proj.embed_model and proj.embed_model != embedding.DEFAULT_MODEL:
-        import sys
-        sys.stderr.write(
-            f"[steelg8] embedding model 不一致 · 索引时={proj.embed_model} "
-            f"· 当前={embedding.DEFAULT_MODEL}。该项目的 RAG 召回已停用，"
-            f"请重新索引。\n"
-        )
-        return []
+    # 模型一致性校验
+    if active:
+        proj = vectordb.get_project(active["path"])
+        if proj and proj.embed_model and proj.embed_model != embedding.DEFAULT_MODEL:
+            import sys
+            sys.stderr.write(
+                f"[steelg8] embedding model 不一致 · 索引时={proj.embed_model} "
+                f"· 当前={embedding.DEFAULT_MODEL}。该项目的 RAG 召回已停用，"
+                f"请重新索引。\n"
+            )
+            skip_current = True
 
     try:
         q_vec = embedding.embed_one(query, registry, timeout=query_timeout)
@@ -270,7 +271,22 @@ def retrieve(
         sys.stderr.write(f"[steelg8] query embedding 失败: {exc}\n")
         return []
 
-    coarse = vectordb.search(project_id, q_vec, top_k=max(coarse_k, top_k))
+    coarse: list[vectordb.Hit] = []
+    if active and project_id and not skip_current:
+        coarse = vectordb.search(project_id, q_vec, top_k=max(coarse_k, top_k))
+
+    # L5 知识库：每次对话都掺进去
+    try:
+        kb_proj = knowledge_mod._ensure_project()
+        if vectordb.count_chunks(kb_proj.id) > 0:
+            kb_hits = vectordb.search(kb_proj.id, q_vec, top_k=5)
+            # 给知识库命中前缀标记，方便 rerank 后识别来源
+            for h in kb_hits:
+                h.rel_path = f"[knowledge] {h.rel_path}"
+            coarse = coarse + kb_hits
+    except Exception:
+        pass
+
     if not coarse:
         return []
 

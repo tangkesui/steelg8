@@ -19,7 +19,13 @@ from pathlib import Path
 from typing import Any, Callable
 
 import extract
-from skills import docx_fill, docx_grow
+import knowledge as knowledge_mod
+import memory
+import project as project_mod
+import templates as template_lib
+import web as web_mod
+from providers import ProviderRegistry
+from skills import docx_diff, docx_fill, docx_grow
 
 
 # ---- 路径安全 ----
@@ -152,14 +158,114 @@ TOOLS: list[dict[str, Any]] = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "diff_documents",
+            "description": "对比两个文档（.md / .txt / .docx / .pdf / .pptx / .doc）的文本差异，返回 unified diff。你拿到 diff 后用自然语言向用户解读'改了什么、加了什么、删了什么'。两份文件都要能读到。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "before": {"type": "string", "description": "旧版本的绝对路径"},
+                    "after": {"type": "string", "description": "新版本的绝对路径"},
+                    "context": {"type": "integer", "default": 2, "description": "diff 上下文行数"},
+                },
+                "required": ["before", "after"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "web_search",
+            "description": "用 Tavily 搜索互联网，返回前 N 条结果（标题 / URL / 摘要）。用户问最新政策 / 查资料 / 对比产品等场景用。要看全文再调 web_fetch。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string"},
+                    "max_results": {"type": "integer", "default": 5, "minimum": 1, "maximum": 10},
+                    "search_depth": {"type": "string", "enum": ["basic", "advanced"], "default": "basic"},
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "web_fetch",
+            "description": "用 Jina Reader 拉取任意 URL 的正文（markdown 格式）。免费。读 web_search 拿到的链接用它。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string", "description": "必须 http:// 或 https:// 开头"},
+                },
+                "required": ["url"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "save_knowledge",
+            "description": (
+                "把一段重要信息存到知识库（~/.steelg8/knowledge/）。"
+                "不像 remember() 是贴在某个文件里的一行，save_knowledge 是**独立的知识卡片**，"
+                "每次对话都会被向量召回。适合：原创观点、客户典型反馈、值得反复引用的片段、"
+                "研究结论。title 要能一眼看懂是什么，content 是一段完整的话（>30 字）。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string"},
+                    "content": {"type": "string"},
+                    "source": {"type": "string", "description": "可选，内容来源，如 URL / 文件路径 / 对话 id"},
+                    "tags": {"type": "array", "items": {"type": "string"}},
+                },
+                "required": ["title", "content"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "templates_list",
+            "description": "列出用户模板库 ~/Documents/steelg8/templates/ 下的所有模板（.docx / .xlsx / .pptx），含每个模板的占位符清单。用户说'用模板 xxx'时先调这个看有什么可用。",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "remember",
+            "description": (
+                "把一条重要信息写入记忆文件，下次对话你能看到。"
+                "scope='user' 写 ~/.steelg8/user.md（所有项目共享的你的偏好）；"
+                "scope='project' 写当前激活项目的 steelg8.md（项目背景/术语/决策）。"
+                "section 是要追加到的小节名（如 '写作口吻与偏好'、'干系人'），"
+                "找不到就新建。"
+                "用户明确说'记住 xxx' / 表达长期偏好 / 提到项目关键背景时使用。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "scope": {"type": "string", "enum": ["user", "project"]},
+                    "section": {"type": "string", "description": "目标 markdown 小节名，如 '写作口吻与偏好'"},
+                    "note": {"type": "string", "description": "要记下的内容，一两句话即可"},
+                },
+                "required": ["scope", "note"],
+            },
+        },
+    },
 ]
 
 
 # ---- 调度 ----
 
 
-def dispatch(name: str, args: dict[str, Any]) -> dict[str, Any]:
-    """执行一个 tool call；总是返回 dict，异常会被转成 {'error': str}。"""
+def dispatch(name: str, args: dict[str, Any], registry: "ProviderRegistry | None" = None) -> dict[str, Any]:
+    """执行一个 tool call；总是返回 dict，异常会被转成 {'error': str}。
+    registry 用于需要调云 API 的 tool（如 save_knowledge 要 embed）。"""
     try:
         if name == "docx_list_placeholders":
             path = _safe_path(args.get("path"), must_exist=True)
@@ -223,6 +329,89 @@ def dispatch(name: str, args: dict[str, Any]) -> dict[str, Any]:
             if len(txt) > 8000:
                 txt = txt[:8000] + "\n\n…（已截断，完整内容超过 8000 字）"
             return {"text": txt}
+
+        if name == "diff_documents":
+            before = _safe_path(args.get("before"), must_exist=True)
+            after = _safe_path(args.get("after"), must_exist=True)
+            return docx_diff.diff_files(
+                before, after,
+                context=int(args.get("context", 2)),
+            )
+
+        if name == "web_search":
+            if registry is None:
+                return {"error": "dispatch: web_search 需要 registry"}
+            try:
+                results = web_mod.search(
+                    str(args.get("query", "")).strip(),
+                    registry,
+                    max_results=int(args.get("max_results", 5)),
+                    search_depth=str(args.get("search_depth", "basic")),
+                )
+            except web_mod.WebError as exc:
+                return {"error": str(exc)}
+            return {"results": results}
+
+        if name == "web_fetch":
+            url = str(args.get("url", "")).strip()
+            if not url:
+                return {"error": "url 不能为空"}
+            try:
+                return web_mod.fetch(url)
+            except web_mod.WebError as exc:
+                return {"error": str(exc)}
+
+        if name == "save_knowledge":
+            if registry is None:
+                return {"error": "dispatch: save_knowledge 需要 registry"}
+            title = str(args.get("title", "")).strip()
+            content = str(args.get("content", "")).strip()
+            if not content:
+                return {"error": "content 不能为空"}
+            tags = args.get("tags") or []
+            source = args.get("source")
+            try:
+                r = knowledge_mod.save_card(
+                    title=title,
+                    content=content,
+                    registry=registry,
+                    source=source if isinstance(source, str) else None,
+                    tags=[str(t) for t in tags] if isinstance(tags, list) else None,
+                )
+            except Exception as exc:  # noqa: BLE001
+                return {"error": f"{exc.__class__.__name__}: {exc}"}
+            return {"ok": True, **r}
+
+        if name == "templates_list":
+            items = template_lib.list_all()
+            return {
+                "dir": str(template_lib.default_dir()),
+                "templates": [
+                    {
+                        "name": t.name,
+                        "path": t.path,
+                        "placeholders": t.placeholders,
+                    }
+                    for t in items
+                ],
+            }
+
+        if name == "remember":
+            scope = str(args.get("scope", "")).strip().lower()
+            section = str(args.get("section", "")).strip() or "其它"
+            note = str(args.get("note", "")).strip()
+            if not note:
+                return {"error": "note 不能为空"}
+            if scope == "user":
+                memory.append_user(section, note)
+                return {"ok": True, "scope": "user", "section": section, "note": note}
+            if scope == "project":
+                active = project_mod.get_active()
+                if not active:
+                    return {"error": "当前没有激活的项目，无法写项目记忆"}
+                memory.append_project_memory(active["path"], section, note)
+                return {"ok": True, "scope": "project", "section": section, "note": note}
+            return {"error": f"scope 必须是 'user' 或 'project'：{scope}"}
 
         return {"error": f"未知 tool: {name}"}
     except ValueError as exc:

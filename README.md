@@ -34,22 +34,58 @@ steelg8 是一个跑在自己 Mac 上的个人 AI 助手。它常驻菜单栏，
 
 更详细的设计可以翻上层目录里的 `steelg8-产品设计方案-v0.1.md`（仓库暂不公开，后续可能裁剪后发布）。
 
-## 当前功能（Phase 0 → 1 过渡）
+## 当前功能（v0.2：Phase 2 基本完成）
 
-- [x] Swift 菜单栏壳子，含 About / Preferences / Quit
-- [x] 全局热键框架（HotkeyRegistry）
-- [x] Python 子进程由 Swift 拉起、退出时自动回收
-- [x] `/health` `/providers` `/capabilities` 端点
-- [x] `/chat`（非流式）+ `/chat/stream`（SSE 流式）双端点
-- [x] **四层路由漏斗**（规则 → Embedding stub → 廉价云 → 高能模型 → mock）
-- [x] **模型能力画像表** (`Python/capabilities.py`)
-- [x] **轻量 agent loop**（消息历史 + 流式 yield + mock 降级）
-- [x] 多 Provider 注册表（`~/.steelg8/providers.json` / 环境变量 / example 三级加载）
-- [x] **SwiftUI Settings 窗口**（Provider 管理 + 默认模型，⌘, 打开）
-- [x] **WKWebView 对话主窗**：React-free 原生 HTML + 流式 SSE + 自写 Markdown 渲染
-- [ ] 记忆层 L2 user.md / L3 project steelg8.md（Phase 2）
-- [ ] Qdrant + 云 Embedding + Office 模板填充（Phase 2）
-- [ ] Canvas / Scratch 多工位（Phase 2 后期）
+**基础设施**
+
+- [x] Swift 菜单栏壳 + 全局热键（⌘⇧D 截图 OCR / ⌘⇧N 便签召唤）
+- [x] Python 子进程自动拉起 + 回收，venv 随 .app 分发
+- [x] 多 Provider 注册表（10 家国内外预设：百炼 / DeepSeek / Kimi / 智谱 / 豆包 / 阶跃 / 零一 / MiniMax / 硅基流动 / OpenRouter / Tavily）
+- [x] 四层路由漏斗 + 模型能力画像 + SSE 流式
+
+**交互**
+
+- [x] WKWebView 对话主窗 + 自写 Markdown 流式渲染
+- [x] Settings 窗口：Provider 管理 + "+ 添加供应商" 市场
+- [x] Canvas 右侧画板（Markdown / Mermaid / 代码 / 预览-源码-分栏三模式）
+- [x] 左侧便签（单 textarea 自动保存 + 一键推 Apple Notes）
+- [x] Token 计费 pill + 按模型拆分
+
+**五层记忆**
+
+- [x] **L1 soul.md**（产品人格）
+- [x] **L2 user.md**（用户画像，可被 `remember` tool 追加）
+- [x] **L3 `<project>/steelg8.md`**（项目记忆，自动生成）
+- [x] **L4 会话**（内存 + 流式 history）
+- [x] **L5 知识库**（`~/.steelg8/knowledge/` + 独立向量集合，每次对话都会被召回）
+
+**RAG + 文档**
+
+- [x] 项目索引：`.md / .txt / .docx / .pdf / .pptx / .doc`（macOS textutil）
+- [x] Qwen text-embedding-v3 + qwen3-rerank，单模型追踪 + 不一致告警
+- [x] docx 操作全套：fill / insert_section / append_paragraphs / append_row / read / diff
+- [x] 模板库 `~/Documents/steelg8/templates/`（Finder 可见 / iCloud 可同步）
+
+**Tool calling**
+
+- [x] OpenAI-style tool calling（非流式 + 流式都支持）；13 个 tool：
+      docx_* ×7 / remember / save_knowledge / templates_list / diff_documents /
+      web_search（Tavily）/ web_fetch（Jina Reader）
+- [x] 路径沙箱（只允许 $HOME 下）+ 结果 chip UI（运行中 → 成功 / 失败）
+- [x] 文件操作类 tool 自动附 "📂 打开 / 🔍 Finder" 按钮
+
+**对比路线图**
+
+| Phase | 状态 |
+|---|---|
+| Phase 0 地基 | ✅ |
+| Phase 1 对话 + Canvas + 便签 + 路由 | ✅ |
+| Phase 2 项目 + RAG + Office + 记忆 + Web | ✅（xlsx/pptx 模板填充未做） |
+| Phase 3 Web 三件套（search + fetch 已做；crawl 未做）| 🔶 |
+| Phase 4 Hotkey 全家桶 | 20% |
+| Phase 5 飞书 Bot | 0% |
+| Phase 6 双机 + 本地模型 | 0% |
+| Phase 7 打包发布 | 10% |
 
 ## 快速开始
 

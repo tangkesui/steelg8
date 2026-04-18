@@ -18,6 +18,12 @@ final class AppController: ObservableObject {
         pythonRuntime.soulFileURL.path
     }
 
+    var userMdURL: URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appending(path: ".steelg8")
+            .appending(path: "user.md")
+    }
+
     private let captureOverlay = ScreenCaptureOverlay()
     private let silentOCR = SilentOCREngine()
     private let pythonRuntime = PythonRuntime()
@@ -75,6 +81,49 @@ final class AppController: ObservableObject {
     func openSoulFile() {
         ensureSoulFileExists()
         NSWorkspace.shared.open(pythonRuntime.soulFileURL)
+    }
+
+    @objc func openTemplatesFolder() {
+        let url = FileManager.default.homeDirectoryForCurrentUser
+            .appending(path: "Documents")
+            .appending(path: "steelg8")
+            .appending(path: "templates")
+        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        NSWorkspace.shared.open(url)
+    }
+
+    @objc func openKnowledgeFolder() {
+        let url = FileManager.default.homeDirectoryForCurrentUser
+            .appending(path: ".steelg8")
+            .appending(path: "knowledge")
+        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        NSWorkspace.shared.open(url)
+    }
+
+    @objc func openUserMdFile() {
+        // Python 端首次 GET /chat 时会创建它；这里兜底：文件不存在则建空骨架
+        let url = userMdURL
+        if !FileManager.default.fileExists(atPath: url.path) {
+            try? FileManager.default.createDirectory(
+                at: url.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            let stub = """
+            # steelg8 用户画像（L2）
+
+            > 这个文件会在每次对话拼进 system prompt。随时手动编辑。
+
+            ## 基本
+
+            （空）
+
+            ## 写作口吻与偏好
+
+            （空）
+            """
+            try? stub.write(to: url, atomically: true, encoding: .utf8)
+        }
+        NSWorkspace.shared.open(url)
     }
 
     @objc func startCapture() {
@@ -163,9 +212,29 @@ final class AppController: ObservableObject {
         captureItem.target = self
         menu.addItem(captureItem)
 
-        let openSoulItem = NSMenuItem(title: "打开 soul.md", action: #selector(openSoulFileMenuItem), keyEquivalent: "")
+        let openSoulItem = NSMenuItem(title: "打开 soul.md（L1 人格）", action: #selector(openSoulFileMenuItem), keyEquivalent: "")
         openSoulItem.target = self
         menu.addItem(openSoulItem)
+
+        let openUserItem = NSMenuItem(title: "打开 user.md（L2 画像）", action: #selector(openUserMdFile), keyEquivalent: "")
+        openUserItem.target = self
+        menu.addItem(openUserItem)
+
+        let openTemplatesItem = NSMenuItem(
+            title: "打开模板库文件夹",
+            action: #selector(openTemplatesFolder),
+            keyEquivalent: ""
+        )
+        openTemplatesItem.target = self
+        menu.addItem(openTemplatesItem)
+
+        let openKnowledgeItem = NSMenuItem(
+            title: "打开知识库文件夹",
+            action: #selector(openKnowledgeFolder),
+            keyEquivalent: ""
+        )
+        openKnowledgeItem.target = self
+        menu.addItem(openKnowledgeItem)
 
         let openProjectItem = NSMenuItem(
             title: "打开项目文件夹…",

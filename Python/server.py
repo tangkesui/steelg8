@@ -33,9 +33,16 @@ import router  # noqa: E402
 import agent  # noqa: E402
 import usage  # noqa: E402
 import scratch  # noqa: E402
+import memory  # noqa: E402
+import templates as template_lib  # noqa: E402
 import project as project_mod  # noqa: E402
 from skills import docx_fill, docx_grow  # noqa: E402
 from skills import registry as tool_registry  # noqa: E402
+
+
+def _urldecode(s: str) -> str:
+    from urllib.parse import unquote
+    return unquote(s)
 
 
 def app_root() -> Path:
@@ -75,13 +82,32 @@ def soul_summary(soul_text: str) -> str:
     return "让文案工作者不用再求任何人。"
 
 
-def build_system_prompt(soul_text: str) -> str:
-    return "\n\n".join(
-        [
-            soul_text.strip(),
-            "你是 steelg8 的本地内核。回答直接，根据当前请求挑合适的详略，必要时先确认链路打通。",
-        ]
-    ).strip()
+def build_system_prompt(
+    soul_text: str,
+    *,
+    project_root: str | None = None,
+    project_name: str = "",
+) -> str:
+    parts = [
+        "## L1 · Soul",
+        soul_text.strip(),
+    ]
+
+    mem_block = memory.compose_memory_block(
+        include_user=True,
+        project_root=project_root,
+        project_name=project_name,
+    )
+    if mem_block:
+        parts.append(mem_block)
+
+    parts.append(
+        "## 对话基调\n\n"
+        "你是 steelg8 的本地内核。回答直接，根据当前请求挑合适的详略。"
+        "遇到用户强调偏好 / 习惯 / 项目背景 / 重要决策时，可以用 remember() 工具"
+        "把它记到 user.md 或 project/steelg8.md，之后的对话你会看到。"
+    )
+    return "\n\n".join(parts)
 
 
 @dataclass
@@ -120,8 +146,16 @@ def _context_from_request(req: ChatRequest, soul_text: str) -> agent.AgentContex
         if role in {"user", "assistant", "system", "tool"} and content:
             msgs.append(agent.ChatMessage(role=role, content=content))
 
+    active = project_mod.get_active()
+    project_root = active.get("path") if active else None
+    project_name = active.get("name", "") if active else ""
+
     return agent.AgentContext(
-        system_prompt=build_system_prompt(soul_text),
+        system_prompt=build_system_prompt(
+            soul_text,
+            project_root=project_root,
+            project_name=project_name,
+        ),
         history=msgs,
     )
 
@@ -179,6 +213,21 @@ class SteelG8Handler(BaseHTTPRequestHandler):
 
         if self.path == "/scratch/note":
             self.respond(200, {"text": scratch.read()})
+            return
+
+        if self.path == "/templates":
+            self.respond(200, {
+                "dir": str(template_lib.default_dir()),
+                "items": [t.to_dict() for t in template_lib.list_all()],
+            })
+            return
+
+        if self.path == "/knowledge":
+            import knowledge as knowledge_mod
+            self.respond(200, {
+                "dir": str(knowledge_mod.knowledge_root()),
+                "items": knowledge_mod.list_cards(),
+            })
             return
 
         if self.path == "/project":
@@ -275,6 +324,12 @@ class SteelG8Handler(BaseHTTPRequestHandler):
         self.respond(404, {"error": "not found"})
 
     def do_DELETE(self) -> None:  # noqa: N802
+        if self.path.startswith("/templates/"):
+            path = self.path[len("/templates/"):]
+            path = _urldecode(path)
+            ok = template_lib.delete(path)
+            self.respond(200 if ok else 400, {"ok": ok})
+            return
         self.respond(404, {"error": "not found"})
 
     # ------------------- handlers -------------------
@@ -465,7 +520,8 @@ class SteelG8Handler(BaseHTTPRequestHandler):
         # Tools：目前只要用户能看到 docx skill 就挂上；token 开销 ~500，flash-lite
         # 跑一次 ¥0.001 级别，值得。后续如果要按对话意图切，在这里筛。
         tools = tool_registry.tool_schemas()
-        tool_dispatch = tool_registry.dispatch
+        registry_ref = self.registry
+        tool_dispatch = lambda n, a: tool_registry.dispatch(n, a, registry=registry_ref)  # noqa: E731
 
         if stream:
             self._stream_response(

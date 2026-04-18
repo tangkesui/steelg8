@@ -111,6 +111,16 @@ enum ProviderCatalog {
             blurb: "GPT/Claude/Gemini/Grok 一把梭，美元按量付费。",
             defaultModels: ["google/gemini-2.5-flash-lite", "anthropic/claude-sonnet-4"]
         ),
+        // ---- Web 工具（不是 LLM，但也占一个 provider 位，用 base_url = 标识）----
+        .init(
+            id: "tavily",
+            name: "Tavily（Web 搜索）",
+            baseURL: "https://api.tavily.com",
+            apiKeyEnv: "TAVILY_API_KEY",
+            signupURL: "https://tavily.com",
+            blurb: "Web 搜索工具。免费 1000 次/月。填 API Key 即可，base_url 忽略。",
+            defaultModels: []
+        ),
     ]
 
     static func preset(by id: String) -> Preset? {
