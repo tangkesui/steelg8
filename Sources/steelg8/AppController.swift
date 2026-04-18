@@ -84,12 +84,59 @@ final class AppController: ObservableObject {
     }
 
     @objc func openTemplatesFolder() {
-        let url = FileManager.default.homeDirectoryForCurrentUser
+        // 读当前 preferences 里的 templates_dir 而不是写死路径
+        Task { @MainActor in
+            let path = await currentTemplatesDir()
+            let url = URL(fileURLWithPath: path)
+            try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+            NSWorkspace.shared.open(url)
+        }
+    }
+
+    @objc func changeTemplatesFolder() {
+        Task { @MainActor in
+            let panel = NSOpenPanel()
+            panel.title = "选一个新的模板库目录"
+            panel.message = "把 Word / Excel / PPT 模板放进去，steelg8 会在对话里自动找到。"
+            panel.prompt = "设为模板库"
+            panel.canChooseDirectories = true
+            panel.canChooseFiles = false
+            panel.allowsMultipleSelection = false
+            panel.canCreateDirectories = true
+            NSApp.activate(ignoringOtherApps: true)
+
+            let resp = await panel.beginSheetSafe()
+            guard resp == .OK, let url = panel.url else { return }
+
+            // 写 preferences
+            var req = URLRequest(url: URL(string: "http://127.0.0.1:8765/preferences")!)
+            req.httpMethod = "POST"
+            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            req.httpBody = try? JSONSerialization.data(
+                withJSONObject: ["templates_dir": url.path]
+            )
+            req.timeoutInterval = 5
+            _ = try? await URLSession.shared.data(for: req)
+
+            statusPresenter.present("模板库已切到 \(url.lastPathComponent)", on: statusItem)
+        }
+    }
+
+    /// 从 kernel 查当前 templates_dir；失败回退默认
+    @MainActor
+    private func currentTemplatesDir() async -> String {
+        let fallback = FileManager.default.homeDirectoryForCurrentUser
             .appending(path: "Documents")
             .appending(path: "steelg8")
-            .appending(path: "templates")
-        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
-        NSWorkspace.shared.open(url)
+            .appending(path: "templates").path
+        var req = URLRequest(url: URL(string: "http://127.0.0.1:8765/preferences")!)
+        req.timeoutInterval = 3
+        guard
+            let (data, _) = try? await URLSession.shared.data(for: req),
+            let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            let dir = dict["templates_dir"] as? String
+        else { return fallback }
+        return dir
     }
 
     @objc func openKnowledgeFolder() {
@@ -233,6 +280,14 @@ final class AppController: ObservableObject {
         )
         openTemplatesItem.target = self
         menu.addItem(openTemplatesItem)
+
+        let changeTemplatesItem = NSMenuItem(
+            title: "更换模板库目录…",
+            action: #selector(changeTemplatesFolder),
+            keyEquivalent: ""
+        )
+        changeTemplatesItem.target = self
+        menu.addItem(changeTemplatesItem)
 
         let openKnowledgeItem = NSMenuItem(
             title: "打开知识库文件夹",

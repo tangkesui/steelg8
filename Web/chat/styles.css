@@ -766,43 +766,6 @@ html.scratch-only-mode .sp-divider { display: none; }
 
 .controls { display: flex; align-items: center; gap: 12px; -webkit-app-region: no-drag; }
 
-.project-pill {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 10px;
-  background: var(--bg-input);
-  border: 1px solid var(--border);
-  border-radius: 20px;
-  font-size: 11px;
-  cursor: pointer;
-  user-select: none;
-  max-width: 240px;
-}
-.project-pill:hover { border-color: var(--accent); }
-.project-pill .project-name {
-  color: var(--text);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  max-width: 140px;
-}
-.project-pill.is-empty .project-name { color: var(--text-muted); }
-.project-pill .project-chunks {
-  font-family: var(--font-mono);
-  color: var(--text-muted);
-  font-size: 10px;
-}
-.project-pill.indexing .project-chunks {
-  color: var(--accent);
-}
-.project-pill.error {
-  border-color: var(--error);
-}
-.project-pill.error .project-chunks {
-  color: var(--error);
-}
-
 /* ---------- wallet pill ---------- */
 .wallet-pill {
   display: flex;

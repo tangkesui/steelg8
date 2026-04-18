@@ -67,7 +67,7 @@ struct OpenedProject: Codable {
     let chunkCount: Int
 }
 
-private extension NSOpenPanel {
+extension NSOpenPanel {
     /// `NSOpenPanel.begin(completionHandler:)` 包装成 async。
     func beginSheetSafe() async -> NSApplication.ModalResponse {
         await withCheckedContinuation { cont in

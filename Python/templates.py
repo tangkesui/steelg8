@@ -25,10 +25,16 @@ SUPPORTED_EXT = {".docx", ".xlsx", ".pptx"}
 
 
 def default_dir() -> Path:
-    p = Path(os.environ.get(
-        "STEELG8_TEMPLATES_DIR",
-        Path.home() / "Documents" / "steelg8" / "templates",
-    ))
+    # 优先级：env var > preferences.json > hardcoded default
+    env = os.environ.get("STEELG8_TEMPLATES_DIR", "").strip()
+    if env:
+        p = Path(env).expanduser()
+    else:
+        try:
+            import preferences
+            p = Path(preferences.get("templates_dir"))
+        except Exception:
+            p = Path.home() / "Documents" / "steelg8" / "templates"
     p.mkdir(parents=True, exist_ok=True)
     return p
 

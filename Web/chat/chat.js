@@ -49,9 +49,6 @@
     scratchToNotes: $("scratch-to-notes"),
     scratchClear: $("scratch-clear"),
     attachRow: $("attach-chip-row"),
-    projectPill: $("project-pill"),
-    projectName: $("project-name"),
-    projectChunks: $("project-chunks"),
     sidebarProject: $("sidebar-project"),
     spBody: $("sp-body"),
     projectOpenBtn: $("project-open-btn"),
@@ -190,42 +187,8 @@
       const r = await fetch(`${API_BASE}/project`, { cache: "no-store" });
       if (!r.ok) return;
       const j = await r.json();
-      const active = j.active;
-      renderProjectPill(active);
-      renderSidebarProject(active);
+      renderSidebarProject(j.active);
     } catch (_) {}
-  }
-
-  function renderProjectPill(active) {
-    if (!UI.projectPill) return;
-    if (!active) {
-      UI.projectPill.classList.add("is-empty");
-      UI.projectPill.classList.remove("indexing", "error");
-      if (UI.projectName) UI.projectName.textContent = "未选项目";
-      if (UI.projectChunks) UI.projectChunks.textContent = "";
-      UI.projectPill.title = "点击打开一个文件夹";
-      return;
-    }
-    UI.projectPill.classList.remove("is-empty");
-    if (UI.projectName) UI.projectName.textContent = active.name || "项目";
-    const idx = active.indexStatus || {};
-    const isRunning = idx.state === "running";
-    const isError = idx.state === "error";
-    UI.projectPill.classList.toggle("indexing", isRunning);
-    UI.projectPill.classList.toggle("error", isError);
-    let chunkLabel;
-    if (isRunning) chunkLabel = `索引中 ${idx.embedded_chunks || 0}/${idx.total_chunks || "?"}`;
-    else if (isError) chunkLabel = "索引失败 ⚠";
-    else chunkLabel = `${active.chunkCount} chunks`;
-    if (UI.projectChunks) UI.projectChunks.textContent = chunkLabel;
-    const tip = [
-      `项目：${active.name}`,
-      `路径：${active.path}`,
-      `chunks：${active.chunkCount}`,
-      `状态：${idx.state || "?"}`,
-    ];
-    if (idx.error) tip.push(`错误：${idx.error}`);
-    UI.projectPill.title = tip.join("\n");
   }
 
   function renderSidebarProject(active) {
@@ -298,14 +261,6 @@
     UI.projectOpenBtn.addEventListener("click", () => {
       if (!swiftBridge("openProjectPicker")) {
         flashRouting("菜单栏 → 打开项目文件夹…（只在 WKWebView 里能直接弹面板）");
-      }
-    });
-  }
-
-  if (UI.projectPill) {
-    UI.projectPill.addEventListener("click", () => {
-      if (!swiftBridge("openProjectPicker")) {
-        flashRouting("菜单栏 → 打开项目文件夹…（⌘⇧O）");
       }
     });
   }

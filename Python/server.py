@@ -34,6 +34,7 @@ import agent  # noqa: E402
 import usage  # noqa: E402
 import scratch  # noqa: E402
 import memory  # noqa: E402
+import preferences as prefs_mod  # noqa: E402
 import templates as template_lib  # noqa: E402
 import wallet as wallet_mod  # noqa: E402
 import project as project_mod  # noqa: E402
@@ -235,6 +236,10 @@ class SteelG8Handler(BaseHTTPRequestHandler):
             self.respond(200, wallet_mod.summary(self.registry))
             return
 
+        if self.path == "/preferences":
+            self.respond(200, prefs_mod.load())
+            return
+
         if self.path == "/project":
             summary = project_mod.active_project_summary()
             self.respond(200, {"active": summary})
@@ -305,6 +310,15 @@ class SteelG8Handler(BaseHTTPRequestHandler):
 
         if self.path == "/project/reindex":
             self._handle_project_reindex()
+            return
+
+        if self.path == "/preferences":
+            body = self.read_json() or {}
+            if not isinstance(body, dict):
+                self.respond(400, {"error": "invalid json"})
+                return
+            updated = prefs_mod.save(body)
+            self.respond(200, updated)
             return
 
         if self.path == "/skills/docx/placeholders":
