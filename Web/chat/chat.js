@@ -466,11 +466,14 @@
     return `${(n / 1_000_000).toFixed(2)}M`;
   }
 
+  let lastProvidersOK = 0;
+
   async function refreshProviders() {
     try {
       const r = await fetch(`${API_BASE}/providers`, { cache: "no-store" });
       if (!r.ok) return;
       const j = await r.json();
+      lastProvidersOK = Date.now();
       const opts = ['<option value="">自动路由</option>'];
       const defaultModel = j.defaultModel || "";
       (j.providers || []).forEach((p) => {
@@ -925,6 +928,10 @@
     setInterval(refreshUsagePill, 15000);
     setInterval(refreshProject, 3000);
     setInterval(refreshWallet, 300_000);
+    // 下拉框如果 30s 内没成功拉到 providers，就重试（防止 kernel 启动慢 / 前端来早了）
+    setInterval(() => {
+      if (Date.now() - lastProvidersOK > 30_000) refreshProviders();
+    }, 10_000);
 
     document.addEventListener("visibilitychange", () => {
       if (!document.hidden) {
