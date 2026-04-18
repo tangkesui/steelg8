@@ -29,12 +29,11 @@ echo "🔨 编译中..."
 DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
   /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swift build 2>&1
 
-# Create .app bundle (only if missing)
-if [ ! -d "${APP_DIR}" ]; then
-    echo "📦 创建 App Bundle..."
-    mkdir -p "${MACOS}" "${RESOURCES}"
+# Ensure .app skeleton + always rewrite Info.plist (idempotent)
+mkdir -p "${MACOS}" "${RESOURCES}"
 
-    cat > "${CONTENTS}/Info.plist" << 'PLIST'
+# 每次都重写 Info.plist，避免老 app 没 NSAppleEventsUsageDescription
+cat > "${CONTENTS}/Info.plist" << 'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -59,10 +58,11 @@ if [ ! -d "${APP_DIR}" ]; then
     <string>14.0</string>
     <key>NSHighResolutionCapable</key>
     <true/>
+    <key>NSAppleEventsUsageDescription</key>
+    <string>steelg8 需要调用 Apple 备忘录来把捕获台内容存到你指定的文件夹里，iCloud 自动同步到手机。</string>
 </dict>
 </plist>
 PLIST
-fi
 
 # Update executable
 echo "📦 更新可执行文件..."

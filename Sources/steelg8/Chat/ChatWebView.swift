@@ -165,8 +165,31 @@ struct ChatWebView: NSViewRepresentable {
                 if FileManager.default.fileExists(atPath: path) {
                     NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
                 }
+            case "saveToNotes":
+                let folder = (payload["folder"] as? String) ?? "steelg8"
+                let title = (payload["title"] as? String) ?? "steelg8 捕获"
+                let body = (payload["body"] as? String) ?? ""
+                Task {
+                    let result = await NotesBridge.addNote(folder: folder, title: title, body: body)
+                    await MainActor.run {
+                        Coordinator.notifyNotesResult(result)
+                    }
+                }
             default:
                 NSLog("steelg8: 未知 JS bridge action: \(action)")
+            }
+        }
+
+        /// 把 Notes 操作结果通过系统通知回显给用户
+        @MainActor
+        static func notifyNotesResult(_ result: Result<Void, NotesBridge.NotesError>) {
+            let item = AppController.shared.statusItem
+            switch result {
+            case .success:
+                StatusItemMessagePresenter().present("已存到 Apple 备忘录", on: item)
+            case .failure(let err):
+                NSLog("steelg8 Notes failed: \(err.localizedDescription)")
+                StatusItemMessagePresenter().present("存备忘录失败：\(err.localizedDescription)", on: item)
             }
         }
     }

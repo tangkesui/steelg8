@@ -142,10 +142,9 @@
           <div class="si-text">${text}</div>
           <div class="si-meta">${ts}${e.origin && e.origin !== "manual" ? " · " + e.origin : ""}</div>
           <div class="si-actions">
-            <button data-action="send" title="发送到对话">🔁 发送</button>
-            <button data-action="attach" class="${attached ? "active" : ""}" title="作为上下文附加">📎 ${attached ? "已附加" : "附加"}</button>
-            <button data-action="card" title="存为知识卡片">💾 ${e.saved ? "已存" : "存卡片"}</button>
-            <button data-action="organize" title="让 AI 整理这段">✨ 整理</button>
+            <button data-action="send" title="文本发到对话输入框">🔁 发送</button>
+            <button data-action="attach" class="${attached ? "active" : ""}" title="作为上下文附到下一次发送">📎 ${attached ? "已附加" : "附加"}</button>
+            <button data-action="notes" title="存到 Apple 备忘录（iCloud 同步到 iPhone）">📝 备忘录</button>
             <button data-action="delete" class="danger" title="删除">✕</button>
           </div>
         </div>`;
@@ -354,7 +353,6 @@
 
     switch (action) {
       case "send":
-        // 把 scratch 文本塞进输入框，不直接发
         UI.input.value = entry.text;
         UI.input.focus();
         break;
@@ -364,16 +362,27 @@
         renderScratch();
         renderAttachChips();
         break;
-      case "card":
-        markScratchSaved(id);
-        break;
-      case "organize":
-        organizeScratch(id);
+      case "notes":
+        saveToNotes(entry);
         break;
       case "delete":
         if (confirm("删除这条 scratch？")) deleteScratch(id);
         break;
     }
+  }
+
+  async function saveToNotes(entry) {
+    const title = (entry.text || "").split("\n")[0].trim().slice(0, 40) || "steelg8 捕获";
+    const ok = swiftBridge("saveToNotes", {
+      folder: "steelg8",
+      title,
+      body: entry.text || "",
+    });
+    if (!ok) {
+      flashRouting("需要在 WKWebView 里才能调 Notes");
+      return;
+    }
+    flashRouting("正在推到 Apple 备忘录…");
   }
 
   function handleAttachChipClick(ev) {
