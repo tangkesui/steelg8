@@ -122,13 +122,14 @@ struct ChatWebView: NSViewRepresentable {
         ) {
             guard let body = msg.body as? [String: Any] else { return }
             let action = (body["action"] as? String) ?? ""
+            let payload = body
             Task { @MainActor in
-                Coordinator.handle(action: action)
+                Coordinator.handle(action: action, payload: payload)
             }
         }
 
         @MainActor
-        static func handle(action: String) {
+        static func handle(action: String, payload: [String: Any] = [:]) {
             switch action {
             case "openProjectPicker":
                 Task { @MainActor in
@@ -149,6 +150,20 @@ struct ChatWebView: NSViewRepresentable {
                     req.httpBody = "{}".data(using: .utf8)
                     req.setValue("application/json", forHTTPHeaderField: "Content-Type")
                     _ = try? await URLSession.shared.data(for: req)
+                }
+            case "openFile":
+                guard let path = payload["path"] as? String, let url = URL(fileURLWithPath: path) as URL? else {
+                    return
+                }
+                if FileManager.default.fileExists(atPath: path) {
+                    NSWorkspace.shared.open(url)
+                } else {
+                    NSLog("steelg8: openFile 目标不存在：\(path)")
+                }
+            case "revealInFinder":
+                guard let path = payload["path"] as? String else { return }
+                if FileManager.default.fileExists(atPath: path) {
+                    NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
                 }
             default:
                 NSLog("steelg8: 未知 JS bridge action: \(action)")

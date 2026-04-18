@@ -58,9 +58,10 @@
 
   // 是否运行在 WKWebView 里（有 webkit bridge）
   const HAS_SWIFT_BRIDGE = !!(window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.steelg8);
-  function swiftBridge(action) {
+  function swiftBridge(action, payload) {
     if (HAS_SWIFT_BRIDGE) {
-      window.webkit.messageHandlers.steelg8.postMessage({ action });
+      const msg = Object.assign({ action }, payload || {});
+      window.webkit.messageHandlers.steelg8.postMessage(msg);
       return true;
     }
     return false;
@@ -724,6 +725,37 @@
     resultEl.className = "tool-result";
     resultEl.textContent = (isErr ? "❌ " : "✓ ") + preview;
     chip.appendChild(resultEl);
+
+    // 如果结果里有 "output" 指向一个文件，加"打开 / Finder"两个快捷按钮
+    const outputPath = !isErr && result && (result.output || result.path);
+    if (outputPath && typeof outputPath === "string" && _looksLikeOfficePath(outputPath)) {
+      const row = document.createElement("div");
+      row.className = "tool-file-actions";
+
+      const openBtn = document.createElement("button");
+      openBtn.textContent = "📂 打开";
+      openBtn.title = `在默认应用打开 ${outputPath}`;
+      openBtn.addEventListener("click", () => {
+        if (!swiftBridge("openFile", { path: outputPath })) {
+          flashRouting("WebView 外无法调用系统打开");
+        }
+      });
+
+      const revealBtn = document.createElement("button");
+      revealBtn.textContent = "🔍 Finder";
+      revealBtn.title = `在 Finder 里定位 ${outputPath}`;
+      revealBtn.addEventListener("click", () => {
+        swiftBridge("revealInFinder", { path: outputPath });
+      });
+
+      row.appendChild(openBtn);
+      row.appendChild(revealBtn);
+      chip.appendChild(row);
+    }
+  }
+
+  function _looksLikeOfficePath(s) {
+    return /\.(docx|doc|xlsx|xls|pptx|ppt|pdf)$/i.test(s);
   }
 
   function compactJSON(obj, maxLen) {

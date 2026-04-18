@@ -384,6 +384,26 @@ html.scratch-only-mode .sp-divider { display: none; }
   border-color: var(--error);
   color: var(--error);
 }
+.tool-file-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
+  flex-basis: 100%;
+}
+.tool-file-actions button {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-size: 11px;
+  padding: 3px 10px;
+  border-radius: 5px;
+  cursor: pointer;
+  font-family: inherit;
+}
+.tool-file-actions button:hover {
+  background: var(--bg);
+  border-color: var(--accent);
+}
 
 /* ---------- RAG 引用 chips ---------- */
 .rag-chips {
