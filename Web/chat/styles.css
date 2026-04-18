@@ -196,10 +196,29 @@ html.scratch-only-mode .scratch-toggle { display: none; }
 html.scratch-only-mode .canvas { display: none; }
 html.scratch-only-mode .sidebar-project,
 html.scratch-only-mode .sp-divider { display: none; }
+/* 折叠时把所有内容都藏起来，只留一个能点的展开条 */
 .scratch[data-mode="collapsed"] .scratch-list,
 .scratch[data-mode="collapsed"] .scratch-composer,
-.scratch[data-mode="collapsed"] .scratch-title {
+.scratch[data-mode="collapsed"] .scratch-title,
+.scratch[data-mode="collapsed"] .sidebar-project,
+.scratch[data-mode="collapsed"] .sp-divider {
   display: none;
+}
+.scratch[data-mode="collapsed"] .scratch-head {
+  justify-content: center;
+  padding: 10px 0;
+  border-bottom: none;
+}
+.scratch[data-mode="collapsed"] .scratch-toggle {
+  width: 26px;
+  height: 26px;
+  border: 1px solid var(--border);
+  font-weight: 600;
+}
+.scratch[data-mode="collapsed"] .scratch-toggle:hover {
+  background: var(--bg-input);
+  color: var(--accent);
+  border-color: var(--accent);
 }
 
 .scratch-head {
