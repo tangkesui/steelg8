@@ -147,9 +147,11 @@ PROFILES: tuple[ModelProfile, ...] = (
         latency_tier="slow",
         tags=("reasoning", "planning"),
     ),
-    # --- OpenRouter（模型比武/国际模型） ---
+    # --- OpenRouter（模型比武/国际模型）
+    # 注意：OpenRouter 接收的 model id 不带 "openrouter/" 前缀，直接是
+    # "anthropic/claude-sonnet-4" / "google/gemini-2.5-pro" 这种 vendor/model 形式
     ModelProfile(
-        model="openrouter/anthropic/claude-3.5-sonnet",
+        model="anthropic/claude-sonnet-4",
         provider="openrouter",
         chinese_writing=4,
         english_writing=5,
@@ -159,7 +161,7 @@ PROFILES: tuple[ModelProfile, ...] = (
         tags=("writing", "reasoning", "english"),
     ),
     ModelProfile(
-        model="openrouter/google/gemini-2.5-pro",
+        model="google/gemini-2.5-pro",
         provider="openrouter",
         chinese_writing=4,
         english_writing=4,
@@ -169,7 +171,7 @@ PROFILES: tuple[ModelProfile, ...] = (
         tags=("long-context", "multimodal"),
     ),
     ModelProfile(
-        model="openrouter/openai/gpt-4o",
+        model="openai/gpt-4o",
         provider="openrouter",
         chinese_writing=4,
         english_writing=5,
@@ -177,6 +179,16 @@ PROFILES: tuple[ModelProfile, ...] = (
         context_tokens=128_000,
         cost_tier="high",
         tags=("writing", "english", "tool-use"),
+    ),
+    ModelProfile(
+        model="x-ai/grok-2-1212",
+        provider="openrouter",
+        chinese_writing=3,
+        english_writing=4,
+        reasoning=3,
+        context_tokens=128_000,
+        cost_tier="mid",
+        tags=("english",),
     ),
 )
 

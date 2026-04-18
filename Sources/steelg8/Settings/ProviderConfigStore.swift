@@ -37,11 +37,40 @@ struct ProviderConfigPayload: Codable {
             case apiKey = "api_key"
             case models
         }
+
+        init(baseURL: String, apiKeyEnv: String, apiKey: String, models: [String]) {
+            self.baseURL = baseURL
+            self.apiKeyEnv = apiKeyEnv
+            self.apiKey = apiKey
+            self.models = models
+        }
+
+        // 宽松解码：api_key / api_key_env / models 任一缺失都回退默认值，
+        // 这样 example 模板（没写 api_key）也能正常加载。
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            self.baseURL   = try c.decodeIfPresent(String.self, forKey: .baseURL) ?? ""
+            self.apiKeyEnv = try c.decodeIfPresent(String.self, forKey: .apiKeyEnv) ?? ""
+            self.apiKey    = try c.decodeIfPresent(String.self, forKey: .apiKey) ?? ""
+            self.models    = try c.decodeIfPresent([String].self, forKey: .models) ?? []
+        }
     }
 
     enum CodingKeys: String, CodingKey {
         case defaultModel = "default_model"
         case providers
+    }
+
+    init(defaultModel: String, providers: [String: ProviderValue]) {
+        self.defaultModel = defaultModel
+        self.providers = providers
+    }
+
+    // 同样宽松解码顶层字段，兼容 example 里多余的 $schema_note。
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.defaultModel = try c.decodeIfPresent(String.self, forKey: .defaultModel) ?? ""
+        self.providers = try c.decodeIfPresent([String: ProviderValue].self, forKey: .providers) ?? [:]
     }
 }
 
@@ -76,10 +105,24 @@ final class ProviderConfigStore {
         configDirectoryURL.appending(path: "providers.json")
     }
 
-    var exampleTemplateURL: URL {
-        appRootURL
-            .appending(path: "config")
-            .appending(path: "providers.example.json")
+    /// 按优先级列出可能的 example 模板路径：
+    /// 1) 打包后 .app 的 Resources/config/providers.example.json
+    /// 2) 开发源树下的 config/providers.example.json
+    var templateCandidates: [URL] {
+        var out: [URL] = []
+        if let bundled = Bundle.main.url(
+            forResource: "providers.example",
+            withExtension: "json",
+            subdirectory: "config"
+        ) {
+            out.append(bundled)
+        }
+        out.append(
+            appRootURL
+                .appendingPathComponent("config")
+                .appendingPathComponent("providers.example.json")
+        )
+        return out
     }
 
     // MARK: - 读
@@ -159,14 +202,18 @@ final class ProviderConfigStore {
             }
         }
 
-        // 回退到仓库自带的 example 模板；失败则给一个空配置
-        if fileManager.fileExists(atPath: exampleTemplateURL.path) {
-            if let data = try? Data(contentsOf: exampleTemplateURL),
-               let payload = try? decoder.decode(ProviderConfigPayload.self, from: data) {
-                return payload
+        // 回退到仓库自带 / .app 内置的 example 模板
+        for template in templateCandidates where fileManager.fileExists(atPath: template.path) {
+            do {
+                let data = try Data(contentsOf: template)
+                return try decoder.decode(ProviderConfigPayload.self, from: data)
+            } catch {
+                NSLog("steelg8 settings: example 模板解码失败 \(template.path): \(error)")
+                continue
             }
         }
 
+        NSLog("steelg8 settings: 所有模板都失败，返回空配置")
         return ProviderConfigPayload(defaultModel: "", providers: [:])
     }
 
