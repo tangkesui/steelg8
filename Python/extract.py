@@ -3,8 +3,8 @@
 --------------------
 
 Phase 2 Step 1：.md / .txt（stdlib）
-Phase 2 Step 2：+ .docx（通过 python-docx，需要 venv）
-Phase 2 Step 3：+ .pdf / .pptx（pypdf / python-pptx，后续）
+Phase 2 Step 2：+ .docx（python-docx）
+Phase 2 Step 3：+ .pdf（pypdf）、.pptx（python-pptx）、.doc（macOS textutil）
 
 切块策略：
 - 先按段落（连续空行）粗分
@@ -18,6 +18,8 @@ Phase 2 Step 3：+ .pdf / .pptx（pypdf / python-pptx，后续）
 from __future__ import annotations
 
 import os
+import shutil as _shutil
+import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable, Iterator
@@ -25,17 +27,43 @@ from typing import Iterable, Iterator
 
 # ---- 配置常量 ----
 
-# 默认允许的扩展名。.docx 的支持在 python-docx 可导入时才真正生效（见 _has_docx）
-SUPPORTED_EXT: set[str] = {".md", ".markdown", ".txt", ".mdx", ".docx"}
+# 默认允许的扩展名。某些格式需要 venv 里装了依赖才真正生效
+SUPPORTED_EXT: set[str] = {
+    ".md", ".markdown", ".txt", ".mdx",
+    ".docx",
+    ".pdf",
+    ".pptx",
+    ".doc",
+}
 
 
 def _has_docx() -> bool:
-    """延迟导入 python-docx，避免 Phase 1 的 stdlib-only 用户被卡。"""
     try:
         import docx  # noqa: F401
         return True
     except ImportError:
         return False
+
+
+def _has_pypdf() -> bool:
+    try:
+        import pypdf  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
+def _has_pptx() -> bool:
+    try:
+        import pptx  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
+def _has_textutil() -> bool:
+    """macOS 自带 textutil；非 macOS 或未装 Developer Tools 时返回 False。"""
+    return _shutil.which("textutil") is not None
 
 # 目录黑名单（绝对跳过）
 SKIP_DIRS: set[str] = {
@@ -47,8 +75,21 @@ SKIP_DIRS: set[str] = {
     ".steelg8",
 }
 
-# 文件大小上限（字节）：超过视为不是常规文本
-MAX_FILE_BYTES = 500_000
+# 文件大小上限（按类型分档）：二进制格式天生比纯文本大得多
+FILE_SIZE_LIMITS: dict[str, int] = {
+    ".md":       1_000_000,
+    ".markdown": 1_000_000,
+    ".mdx":      1_000_000,
+    ".txt":      1_000_000,
+    ".docx":    50_000_000,
+    ".doc":     50_000_000,
+    ".pdf":    100_000_000,
+    ".pptx":    50_000_000,
+}
+DEFAULT_SIZE_LIMIT = 1_000_000
+
+# 单个文件抽出来的纯文本最长截到这里，防止一本书式 PDF 把管线爆掉
+MAX_EXTRACT_CHARS = 500_000
 
 # 粗估 token 数：每个字约 0.5 token
 def _approx_tokens(s: str) -> int:
@@ -84,8 +125,11 @@ def walk_project(root: str) -> Iterator[FileRef]:
     if not root_path.is_dir():
         return
 
-    # docx 支持要等 python-docx 装上，venv 没 ready 时跳过
+    # 按依赖可用性裁剪：缺包的格式不走索引，免得静默失败
     docx_ok = _has_docx()
+    pdf_ok = _has_pypdf()
+    pptx_ok = _has_pptx()
+    doc_ok = _has_textutil()
 
     results: list[FileRef] = []
     for dirpath, dirnames, filenames in os.walk(root_path):
@@ -100,12 +144,19 @@ def walk_project(root: str) -> Iterator[FileRef]:
                 continue
             if ext == ".docx" and not docx_ok:
                 continue
+            if ext == ".pdf" and not pdf_ok:
+                continue
+            if ext == ".pptx" and not pptx_ok:
+                continue
+            if ext == ".doc" and not doc_ok:
+                continue
             abs_path = Path(dirpath) / fname
             try:
                 stat = abs_path.stat()
             except OSError:
                 continue
-            if stat.st_size > MAX_FILE_BYTES:
+            size_limit = FILE_SIZE_LIMITS.get(ext, DEFAULT_SIZE_LIMIT)
+            if stat.st_size > size_limit:
                 continue
             if stat.st_size == 0:
                 continue
@@ -127,16 +178,29 @@ def walk_project(root: str) -> Iterator[FileRef]:
 
 
 def read_text(abs_path: str) -> str:
-    """把支持的文件读成纯文本。根据扩展名走不同解析器。"""
+    """把支持的文件读成纯文本。根据扩展名走不同解析器。
+    统一在出口做长度截断，防止一份超大 PDF 把 embedding 管线打爆。
+    """
     ext = Path(abs_path).suffix.lower()
     if ext == ".docx":
-        return read_docx(abs_path)
-    try:
-        with open(abs_path, "r", encoding="utf-8") as f:
-            return f.read()
-    except UnicodeDecodeError:
-        with open(abs_path, "r", encoding="latin-1") as f:
-            return f.read()
+        raw = read_docx(abs_path)
+    elif ext == ".pdf":
+        raw = read_pdf(abs_path)
+    elif ext == ".pptx":
+        raw = read_pptx(abs_path)
+    elif ext == ".doc":
+        raw = read_legacy_doc(abs_path)
+    else:
+        try:
+            with open(abs_path, "r", encoding="utf-8") as f:
+                raw = f.read()
+        except UnicodeDecodeError:
+            with open(abs_path, "r", encoding="latin-1") as f:
+                raw = f.read()
+
+    if len(raw) > MAX_EXTRACT_CHARS:
+        raw = raw[:MAX_EXTRACT_CHARS] + "\n\n…（抽取内容已截断，超过 {:,} 字）".format(MAX_EXTRACT_CHARS)
+    return raw
 
 
 def read_docx(abs_path: str) -> str:
@@ -196,6 +260,104 @@ def read_docx(abs_path: str) -> str:
                 out.append(md)
 
     return "\n\n".join(out)
+
+
+def read_pdf(abs_path: str) -> str:
+    """用 pypdf 抽文本 PDF 的文字。扫描件（图像）得靠 OCR，不在这里管。"""
+    try:
+        import pypdf
+    except ImportError:
+        return ""
+
+    try:
+        reader = pypdf.PdfReader(abs_path)
+    except Exception:
+        return ""
+
+    pages_text: list[str] = []
+    for i, page in enumerate(reader.pages, start=1):
+        try:
+            txt = page.extract_text() or ""
+        except Exception:
+            txt = ""
+        txt = txt.strip()
+        if txt:
+            pages_text.append(f"<!-- page {i} -->\n{txt}")
+
+    return "\n\n".join(pages_text)
+
+
+def read_pptx(abs_path: str) -> str:
+    """从 pptx 抽文本：每页一个二级标题，每个 text frame 一段。"""
+    try:
+        from pptx import Presentation
+    except ImportError:
+        return ""
+
+    try:
+        prs = Presentation(abs_path)
+    except Exception:
+        return ""
+
+    out: list[str] = []
+    for idx, slide in enumerate(prs.slides, start=1):
+        title = ""
+        body_parts: list[str] = []
+        # 标题通常在第一个 placeholder
+        for shape in slide.shapes:
+            if not getattr(shape, "has_text_frame", False):
+                continue
+            text_frame = shape.text_frame
+            full = "\n".join(p.text for p in text_frame.paragraphs if p.text).strip()
+            if not full:
+                continue
+            # 取第一个非空的作为标题
+            if not title:
+                title = full.split("\n")[0][:80]
+                rest = "\n".join(full.split("\n")[1:]).strip()
+                if rest:
+                    body_parts.append(rest)
+            else:
+                body_parts.append(full)
+
+        if title:
+            out.append(f"## {title}")
+        else:
+            out.append(f"## Slide {idx}")
+        if body_parts:
+            out.append("\n\n".join(body_parts))
+
+    return "\n\n".join(out)
+
+
+def read_legacy_doc(abs_path: str) -> str:
+    """用 macOS 自带的 textutil 把 .doc 转 txt，再读。
+    非 macOS / 未装开发者工具时返回空。"""
+    if not _has_textutil():
+        return ""
+    import tempfile
+    with tempfile.NamedTemporaryFile(suffix=".txt", delete=False) as f:
+        tmp_path = f.name
+    try:
+        result = subprocess.run(
+            ["textutil", "-convert", "txt", "-output", tmp_path, abs_path],
+            capture_output=True, timeout=30,
+        )
+        if result.returncode != 0:
+            return ""
+        try:
+            with open(tmp_path, "r", encoding="utf-8") as f:
+                return f.read()
+        except UnicodeDecodeError:
+            with open(tmp_path, "r", encoding="gbk", errors="replace") as f:
+                return f.read()
+    except (subprocess.SubprocessError, OSError):
+        return ""
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
 
 
 def _docx_table_to_markdown(tbl: object) -> str:

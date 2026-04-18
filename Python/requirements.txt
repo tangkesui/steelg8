@@ -11,8 +11,11 @@
 # ---- docx 抽取 + 模板填充（Phase 2 Step 2）----
 python-docx>=1.1
 
-# ---- PDF 文本抽取（Phase 2 Step 3 再开启）----
-# pypdf>=4.3
+# ---- PDF 文本抽取（Phase 2 Step 3）----
+# pypdf：纯 Python，小巧，文本型 PDF 够用
+pypdf>=5.0
 
-# ---- pptx（Phase 2 Step 4）----
-# python-pptx>=1.0
+# ---- pptx 抽取 ----
+python-pptx>=1.0
+
+# 注：.doc（2003 老二进制）走 macOS 自带的 textutil 命令，无 pip 依赖
