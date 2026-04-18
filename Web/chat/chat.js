@@ -456,11 +456,13 @@
       <div class="avatar">${role === "user" ? "你" : "⚒"}</div>
       <div class="content">
         <div class="bubble"></div>
+        <div class="bubble-actions"></div>
         <div class="meta"></div>
       </div>
     `;
     const bubble = node.querySelector(".bubble");
     const metaEl = node.querySelector(".meta");
+    const actionsEl = node.querySelector(".bubble-actions");
 
     if (role === "user") {
       bubble.textContent = content;
@@ -473,7 +475,7 @@
     if (meta) metaEl.textContent = meta;
     UI.messages.appendChild(node);
     scrollToBottom();
-    return { node, bubble, metaEl };
+    return { node, bubble, metaEl, actionsEl };
   }
 
   function updateStreamingAssistant(bubble, full) {
@@ -490,6 +492,40 @@
   function scrollToBottom() {
     UI.messages.scrollTop = UI.messages.scrollHeight;
   }
+
+  // ---- Canvas 集成 ----
+  function attachCanvasActions(actionsEl, fullText) {
+    if (!actionsEl || !fullText) return;
+    actionsEl.innerHTML = "";
+    const btn = document.createElement("button");
+    btn.textContent = "🖼️ 打开 Canvas";
+    btn.title = "把这条回复加载到右侧 Canvas";
+    btn.addEventListener("click", () => {
+      window.SteelCanvas && window.SteelCanvas.open(fullText, "来自对话");
+    });
+    actionsEl.appendChild(btn);
+    // 有值得 Canvas 展示的内容（mermaid/代码/长结构），默认显示按钮
+    if (window.SteelCanvas && window.SteelCanvas.isWorthy(fullText)) {
+      actionsEl.parentElement?.parentElement?.classList.add("has-canvas-action");
+    }
+  }
+
+  function maybeAutoOpenCanvas(fullText) {
+    // 只自动打开一次 mermaid 图那种明显需要的；其他情况用户手动点
+    if (!window.SteelCanvas) return;
+    if (!/```mermaid/.test(fullText)) return;
+    if (!window.SteelCanvas.isOpen()) {
+      window.SteelCanvas.open(fullText, "来自对话（自动打开）");
+    }
+  }
+
+  // Canvas 的 "发送到对话" 按钮事件
+  window.addEventListener("steelg8:canvas-to-chat", (ev) => {
+    const t = ev.detail && ev.detail.text;
+    if (!t) return;
+    UI.input.value = t;
+    UI.input.focus();
+  });
 
   function setRoutingHint(decision) {
     if (!decision) {
@@ -540,9 +576,10 @@
     history.push({ role: "user", content: finalMessage });
 
     // assistant 占位
-    const { bubble, metaEl } = addMessage("assistant", "", "");
+    const { bubble, metaEl, actionsEl } = addMessage("assistant", "", "");
     activeDeltaNode = bubble;
     activeFullBuffer = "";
+    const activeActionsEl = actionsEl;
 
     const payload = {
       message: finalMessage,
@@ -632,6 +669,9 @@
               if (evt.source) {
                 metaEl.textContent = (metaEl.textContent || "") + ` · ${evt.source}`;
               }
+              // 完整内容就绪 → 给消息挂上 Canvas 动作 + 按需自动打开
+              attachCanvasActions(activeActionsEl, activeFullBuffer);
+              maybeAutoOpenCanvas(activeFullBuffer);
             }
           }
         }
