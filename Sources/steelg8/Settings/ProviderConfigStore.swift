@@ -4,15 +4,46 @@ import Foundation
 /// 与 Python 端 `providers.py` 的 JSON schema 对齐：
 /// - api_key 为空时，Python 端会回退去读 api_key_env
 /// - 两者都为空则 provider 视为未就绪
+/// 一条模型 row，用稳定 UUID 做 SwiftUI ForEach 的 id。
+/// 避免"按 index 做 id + Binding"在删除时越界崩溃。
+struct ModelRow: Identifiable, Equatable {
+    let id: UUID
+    var value: String
+
+    init(_ value: String, id: UUID = UUID()) {
+        self.id = id
+        self.value = value
+    }
+}
+
 /// 给 SettingsView 用的视图模型。不参与 JSON 编解码（JSON 层用 ProviderConfigPayload）。
 struct ProviderEntry: Identifiable, Equatable {
     var name: String          // "kimi" / "deepseek" / "qwen" / "openrouter" …
     var baseURL: String
     var apiKeyEnv: String
     var apiKey: String        // Settings UI 直接写入的明文 key（可空）
-    var models: [String]
+    var modelRows: [ModelRow]
 
     var id: String { name }
+
+    init(
+        name: String,
+        baseURL: String,
+        apiKeyEnv: String,
+        apiKey: String,
+        models: [String]
+    ) {
+        self.name = name
+        self.baseURL = baseURL
+        self.apiKeyEnv = apiKeyEnv
+        self.apiKey = apiKey
+        self.modelRows = models.map { ModelRow($0) }
+    }
+
+    /// 保存到 JSON 时扁平化成 [String]。
+    var models: [String] {
+        modelRows.map(\.value)
+    }
 
     /// 本地判断是否可用，决策仅供 UI 显示；Python 端有自己的权威判断。
     var isConfigured: Bool {

@@ -143,33 +143,8 @@ struct SettingsView: View {
                 }
 
                 GroupBox(label: Text("支持的模型").font(.subheadline.bold())) {
-                    VStack(alignment: .leading, spacing: 8) {
-                        ForEach(Array(entry.models.enumerated()), id: \.offset) { modelIndex, _ in
-                            HStack {
-                                TextField("", text: Binding(
-                                    get: { viewModel.entries[index].models[modelIndex] },
-                                    set: { viewModel.entries[index].models[modelIndex] = $0 }
-                                ))
-                                .textFieldStyle(.roundedBorder)
-
-                                Button {
-                                    viewModel.entries[index].models.remove(at: modelIndex)
-                                } label: {
-                                    Image(systemName: "minus.circle")
-                                }
-                                .buttonStyle(.borderless)
-                                .help("移除这个模型")
-                            }
-                        }
-
-                        Button {
-                            viewModel.entries[index].models.append("")
-                        } label: {
-                            Label("添加模型", systemImage: "plus.circle")
-                        }
-                        .buttonStyle(.borderless)
-                    }
-                    .padding(.vertical, 8)
+                    modelsSection(providerIndex: index)
+                        .padding(.vertical, 8)
                 }
 
                 Spacer(minLength: 0)
@@ -191,6 +166,52 @@ struct SettingsView: View {
                     .foregroundStyle(entry.isConfigured ? .green : .orange)
             }
             Spacer()
+        }
+    }
+
+    /// 模型列表，用 row.id（稳定 UUID）做 ForEach 的 identity，避免
+    /// 删除时按 index 重入 Binding 触发越界崩溃。
+    @ViewBuilder
+    private func modelsSection(providerIndex: Int) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(viewModel.entries[providerIndex].modelRows) { row in
+                HStack {
+                    TextField(
+                        "",
+                        text: Binding(
+                            get: {
+                                viewModel.modelText(providerIndex: providerIndex, rowID: row.id)
+                            },
+                            set: { newValue in
+                                viewModel.updateModelText(
+                                    providerIndex: providerIndex,
+                                    rowID: row.id,
+                                    newValue: newValue
+                                )
+                            }
+                        )
+                    )
+                    .textFieldStyle(.roundedBorder)
+
+                    Button {
+                        viewModel.removeModelRow(
+                            providerIndex: providerIndex,
+                            rowID: row.id
+                        )
+                    } label: {
+                        Image(systemName: "minus.circle")
+                    }
+                    .buttonStyle(.borderless)
+                    .help("移除这个模型")
+                }
+            }
+
+            Button {
+                viewModel.appendModelRow(providerIndex: providerIndex)
+            } label: {
+                Label("添加模型", systemImage: "plus.circle")
+            }
+            .buttonStyle(.borderless)
         }
     }
 
@@ -256,6 +277,32 @@ final class SettingsViewModel: ObservableObject {
 
     var allModels: [String] {
         entries.flatMap(\.models).filter { !$0.isEmpty }
+    }
+
+    // MARK: - 模型列表按 UUID 操作（避免 index 失效崩溃）
+
+    func modelText(providerIndex: Int, rowID: UUID) -> String {
+        guard entries.indices.contains(providerIndex),
+              let r = entries[providerIndex].modelRows.first(where: { $0.id == rowID })
+        else { return "" }
+        return r.value
+    }
+
+    func updateModelText(providerIndex: Int, rowID: UUID, newValue: String) {
+        guard entries.indices.contains(providerIndex) else { return }
+        if let rowIdx = entries[providerIndex].modelRows.firstIndex(where: { $0.id == rowID }) {
+            entries[providerIndex].modelRows[rowIdx].value = newValue
+        }
+    }
+
+    func removeModelRow(providerIndex: Int, rowID: UUID) {
+        guard entries.indices.contains(providerIndex) else { return }
+        entries[providerIndex].modelRows.removeAll { $0.id == rowID }
+    }
+
+    func appendModelRow(providerIndex: Int) {
+        guard entries.indices.contains(providerIndex) else { return }
+        entries[providerIndex].modelRows.append(ModelRow(""))
     }
 
     func loadIfNeeded() {
