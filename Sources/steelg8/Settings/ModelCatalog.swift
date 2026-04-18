@@ -51,14 +51,15 @@ enum ModelCatalog {
         }
     }
 
-    // MARK: - Kimi / Moonshot
+    // MARK: - Kimi / Moonshot（2026 年起 k2.5 是旗舰）
 
     private static let kimi: [Suggestion] = [
-        .init("kimi-k2-0905-preview", hint: "旗舰，中文文案主力"),
-        .init("kimi-thinking-preview", hint: "推理增强"),
-        .init("moonshot-v1-128k", hint: "128K 长上下文"),
-        .init("moonshot-v1-32k"),
-        .init("moonshot-v1-8k", hint: "便宜")
+        .init("kimi-k2.5", hint: "★ 最新旗舰，多模态 + thinking + agent，256K 上下文"),
+        .init("kimi-k2-0905-preview", hint: "上一代旗舰 K2"),
+        .init("kimi-thinking-preview", hint: "深度推理"),
+        .init("moonshot-v1-128k", hint: "128K 长上下文（老版）"),
+        .init("moonshot-v1-32k", hint: "老版"),
+        .init("moonshot-v1-8k", hint: "老版便宜档")
     ]
 
     // MARK: - DeepSeek

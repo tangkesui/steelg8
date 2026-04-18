@@ -50,7 +50,18 @@ class ModelProfile:
 # 按设计方案 §6.5 的画像表落到代码。星级全部用 1~5 的整型方便排序。
 # 备注：Claude 系列按 ADR-010 明确不内置，这里不登记。
 PROFILES: tuple[ModelProfile, ...] = (
-    # --- Kimi ---
+    # --- Kimi（2026 旗舰是 k2.5）---
+    ModelProfile(
+        model="kimi-k2.5",
+        provider="kimi",
+        chinese_writing=5,
+        english_writing=4,
+        reasoning=5,
+        context_tokens=256_000,
+        cost_tier="mid",
+        tool_use=True,
+        tags=("writing", "chinese", "long-form", "reasoning", "multimodal", "agent"),
+    ),
     ModelProfile(
         model="kimi-k2",
         provider="kimi",

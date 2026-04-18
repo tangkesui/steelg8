@@ -26,6 +26,24 @@ from router import RoutingDecision
 import pricing
 
 
+# 某些"thinking"类模型只接受固定 temperature。清单按 model id 前缀匹配。
+_FIXED_TEMPERATURE_MODELS: tuple[tuple[str, float], ...] = (
+    ("kimi-k2.5", 1.0),
+    ("kimi-k2-thinking", 1.0),
+    ("kimi-thinking", 1.0),
+    ("deepseek-reasoner", 1.0),   # DS R1 也是固定
+    ("o1", 1.0),
+    ("openai/o1", 1.0),
+)
+
+
+def _effective_temperature(model: str, requested: float) -> float:
+    for prefix, fixed in _FIXED_TEMPERATURE_MODELS:
+        if model and (model == prefix or model.startswith(prefix)):
+            return fixed
+    return requested
+
+
 @dataclass
 class ChatMessage:
     role: str
@@ -113,10 +131,11 @@ def run_once(
     last_error: str | None = None
 
     for _ in range(MAX_TOOL_ITER):
+        model_id = decision.model or (provider.models[0] if provider.models else "")
         payload: dict[str, Any] = {
-            "model": decision.model or (provider.models[0] if provider.models else ""),
+            "model": model_id,
             "messages": messages,
-            "temperature": temperature,
+            "temperature": _effective_temperature(model_id, temperature),
             "stream": False,
         }
         if tools:
@@ -239,10 +258,11 @@ def run_stream(
     resolved_model: str | None = None
 
     for _ in range(MAX_TOOL_ITER):
+        model_id = decision.model or (provider.models[0] if provider.models else "")
         payload: dict[str, Any] = {
-            "model": decision.model or (provider.models[0] if provider.models else ""),
+            "model": model_id,
             "messages": messages,
-            "temperature": temperature,
+            "temperature": _effective_temperature(model_id, temperature),
             "stream": True,
             "stream_options": {"include_usage": True},
         }

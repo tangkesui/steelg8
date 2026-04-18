@@ -84,11 +84,12 @@ PRICING: dict[str, Price] = {
     "deepseek-reasoner":  Price(0.55, 2.19),
 
     # ---- Kimi 官方直连（¥/M 换算到 USD，1 USD≈7.2 CNY） ----
+    "kimi-k2.5":               Price(0.83, 3.33),   # ¥6/M input, ¥24/M output (2026 旗舰)
+    "kimi-k2-0905-preview":    Price(0.56, 2.22),   # ¥4/M / ¥16/M
+    "kimi-thinking-preview":   Price(4.17, 4.17),
     "moonshot-v1-8k":          Price(1.67, 1.67),   # ¥12/M
     "moonshot-v1-32k":         Price(3.33, 3.33),   # ¥24/M
     "moonshot-v1-128k":        Price(8.33, 8.33),   # ¥60/M
-    "kimi-k2-0905-preview":    Price(0.56, 2.22),   # ¥4/M / ¥16/M
-    "kimi-thinking-preview":   Price(4.17, 4.17),
 
     # ---- Qwen 百炼直连（¥/M 换算到 USD） ----
     "qwen-turbo":     Price(0.042, 0.125),  # ¥0.3/M / ¥0.9/M

@@ -45,8 +45,8 @@ enum ProviderCatalog {
             baseURL: "https://api.moonshot.cn/v1",
             apiKeyEnv: "KIMI_API_KEY",
             signupURL: "https://platform.moonshot.cn",
-            blurb: "中文文案主力，长上下文。Coding Plan 附 API 额度。",
-            defaultModels: ["kimi-k2-0905-preview", "moonshot-v1-32k", "moonshot-v1-128k"]
+            blurb: "Kimi K2.5 是 2026 年旗舰，多模态 + agent + 256K 上下文。Coding Plan 附 API 额度。",
+            defaultModels: ["kimi-k2.5", "kimi-k2-0905-preview", "kimi-thinking-preview"]
         ),
         .init(
             id: "zhipu",

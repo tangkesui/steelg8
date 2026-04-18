@@ -803,6 +803,25 @@ html.scratch-only-mode .sp-divider { display: none; }
   color: var(--error);
 }
 
+/* ---------- wallet pill ---------- */
+.wallet-pill {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  cursor: pointer;
+  user-select: none;
+}
+.wallet-pill:hover { border-color: var(--accent); }
+.wallet-pill .wallet-icon { font-size: 11px; }
+.wallet-pill .wallet-main { color: var(--text); }
+.wallet-pill.low .wallet-main { color: var(--error); }
+
 .usage-pill {
   display: flex;
   align-items: baseline;

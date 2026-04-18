@@ -35,6 +35,7 @@ import usage  # noqa: E402
 import scratch  # noqa: E402
 import memory  # noqa: E402
 import templates as template_lib  # noqa: E402
+import wallet as wallet_mod  # noqa: E402
 import project as project_mod  # noqa: E402
 from skills import docx_fill, docx_grow  # noqa: E402
 from skills import registry as tool_registry  # noqa: E402
@@ -67,7 +68,7 @@ def ensure_soul_file() -> str:
             SOUL_PATH.write_text(SOUL_TEMPLATE_PATH.read_text(encoding="utf-8"), encoding="utf-8")
         else:
             SOUL_PATH.write_text(
-                "# steelg8 Soul\n\n- 让文案工作者不用再求任何人。\n- 回答直接，不铺垫。\n",
+                "# steelg8 Soul\n\n- 方案不求人。\n- 回答直接，不铺垫。\n",
                 encoding="utf-8",
             )
 
@@ -79,7 +80,7 @@ def soul_summary(soul_text: str) -> str:
         line = line.strip()
         if line.startswith("- "):
             return line[2:]
-    return "让文案工作者不用再求任何人。"
+    return "方案不求人。"
 
 
 def build_system_prompt(
@@ -228,6 +229,10 @@ class SteelG8Handler(BaseHTTPRequestHandler):
                 "dir": str(knowledge_mod.knowledge_root()),
                 "items": knowledge_mod.list_cards(),
             })
+            return
+
+        if self.path == "/wallet":
+            self.respond(200, wallet_mod.summary(self.registry))
             return
 
         if self.path == "/project":

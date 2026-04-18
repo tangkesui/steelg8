@@ -55,6 +55,8 @@
     sidebarProject: $("sidebar-project"),
     spBody: $("sp-body"),
     projectOpenBtn: $("project-open-btn"),
+    walletPill: $("wallet-pill"),
+    walletMain: $("wallet-main"),
   };
 
   // 是否运行在 WKWebView 里（有 webkit bridge）
@@ -356,6 +358,65 @@
       }
     };
     setTimeout(() => document.addEventListener("click", off, true), 0);
+  }
+
+  // ================== 钱包 pill ==================
+
+  async function refreshWallet() {
+    if (!UI.walletPill) return;
+    try {
+      const r = await fetch(`${API_BASE}/wallet`, { cache: "no-store" });
+      if (!r.ok) return;
+      const j = await r.json();
+      const items = j.items || [];
+      const totalUsd = Number(j.totalAvailableUsd || 0);
+      const cnyRate = Number(j.cnyRate || 7.2);
+
+      if (UI.walletMain) {
+        UI.walletMain.textContent = totalUsd > 0
+          ? `¥${(totalUsd * cnyRate).toFixed(1)}`
+          : "—";
+      }
+      UI.walletPill.classList.toggle("low", totalUsd > 0 && totalUsd < 1);
+
+      // 详细 tooltip
+      const lines = [];
+      items.forEach((it) => {
+        const status = it.status;
+        const name = it.name || it.provider;
+        if (status === "ok") {
+          const bal = it.available !== null && it.available !== undefined ? it.available : "?";
+          const cur = it.currency || "";
+          const usd = it.available_usd !== null ? `$${Number(it.available_usd).toFixed(2)}` : "";
+          lines.push(`✓ ${name}: ${bal} ${cur} ${usd ? "(" + usd + ")" : ""}`);
+        } else if (status === "missing_key") {
+          lines.push(`— ${name}: 未配 key`);
+        } else if (status === "no_api") {
+          lines.push(`· ${name}: 平台无查询 API（点 pill 打开控制台）`);
+        } else {
+          lines.push(`✗ ${name}: ${it.error || "error"}`);
+        }
+      });
+      lines.push("");
+      lines.push("点击 pill：去百炼控制台查账单");
+      lines.push("刷新：每 5 分钟自动更新");
+      UI.walletPill.title = lines.join("\n");
+
+      // 存起来给点击用
+      UI.walletPill._items = items;
+    } catch (_) {}
+  }
+
+  if (UI.walletPill) {
+    UI.walletPill.addEventListener("click", () => {
+      const items = UI.walletPill._items || [];
+      // 优先打开第一个 no_api（百炼）的 console_url，否则开 Kimi
+      const fallback = items.find((i) => i.status === "no_api" && i.console_url)
+                    || items.find((i) => i.status === "ok" && i.console_url);
+      if (fallback && fallback.console_url) {
+        window.open(fallback.console_url, "_blank");
+      }
+    });
   }
 
   async function refreshUsagePill() {
@@ -858,20 +919,24 @@
     await refreshUsagePill();
     await loadScratchNote();
     await refreshProject();
-    // 每 8s health、15s usage、3s project（索引跑时能看到进度）
+    await refreshWallet();
+    // 每 8s health、15s usage、3s project、5min wallet（钱包变化慢）
     setInterval(refreshHealth, 8000);
     setInterval(refreshUsagePill, 15000);
     setInterval(refreshProject, 3000);
+    setInterval(refreshWallet, 300_000);
 
     document.addEventListener("visibilitychange", () => {
       if (!document.hidden) {
         refreshUsagePill();
         refreshProject();
+        refreshWallet();
       }
     });
     window.addEventListener("focus", () => {
       refreshUsagePill();
       refreshProject();
+      refreshWallet();
     });
   })();
 })();

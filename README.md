@@ -1,6 +1,6 @@
 # steelg8
 
-> 让文案工作者不用再求任何人。
+> 方案不求人。
 >
 > A personal macOS-native AI agent for copywriters — menu-bar resident, multi-provider, local-first.
 
