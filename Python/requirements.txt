@@ -1,0 +1,13 @@
+# steelg8 Python kernel dependencies
+# Pinned major versions to avoid surprise API breakage.
+#
+# Phase 2 起不再 stdlib-only —— 需要 PDF/docx 解析和更稳的文本处理。
+# 这份清单越少越好，添加新依赖需要在 PR 里说明必要性。
+
+# ---- 必须 ----
+# 目前核心服务仍走 stdlib（urllib + json + http.server）；
+# 下面这些只在 RAG/项目索引路径上用到
+
+# ---- PDF / docx 文本抽取（Phase 2 Step 2 再开启）----
+# pypdf>=4.3
+# python-docx>=1.1

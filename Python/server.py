@@ -33,6 +33,7 @@ import router  # noqa: E402
 import agent  # noqa: E402
 import usage  # noqa: E402
 import scratch  # noqa: E402
+import project as project_mod  # noqa: E402
 
 
 def app_root() -> Path:
@@ -179,6 +180,15 @@ class SteelG8Handler(BaseHTTPRequestHandler):
             self.respond(200, {"items": [e.to_dict() for e in entries]})
             return
 
+        if self.path == "/project":
+            summary = project_mod.active_project_summary()
+            self.respond(200, {"active": summary})
+            return
+
+        if self.path == "/project/status":
+            self.respond(200, project_mod.status())
+            return
+
         if self.path == "/capabilities":
             # 画像表快照，前端可用来展示模型能力
             import capabilities as caps
@@ -237,6 +247,19 @@ class SteelG8Handler(BaseHTTPRequestHandler):
                 self.respond(404, {"error": "not found"})
             return
 
+        if self.path == "/project/open":
+            self._handle_project_open()
+            return
+
+        if self.path == "/project/close":
+            project_mod.close_project()
+            self.respond(200, {"ok": True})
+            return
+
+        if self.path == "/project/reindex":
+            self._handle_project_reindex()
+            return
+
         self.respond(404, {"error": "not found"})
 
     def do_DELETE(self) -> None:  # noqa: N802
@@ -250,6 +273,51 @@ class SteelG8Handler(BaseHTTPRequestHandler):
         self.respond(404, {"error": "not found"})
 
     # ------------------- handlers -------------------
+
+    def _handle_project_open(self) -> None:
+        body = self.read_json()
+        if not isinstance(body, dict):
+            self.respond(400, {"error": "invalid json"})
+            return
+        path = str(body.get("path", "")).strip()
+        if not path:
+            self.respond(400, {"error": "path is required"})
+            return
+        rebuild = bool(body.get("rebuild", True))
+        try:
+            proj = project_mod.open_project(path, self.registry, rebuild=rebuild)
+        except ValueError as exc:
+            self.respond(400, {"error": str(exc)})
+            return
+        except Exception as exc:  # noqa: BLE001
+            self.respond(500, {"error": f"{exc.__class__.__name__}: {exc}"})
+            return
+
+        self.respond(200, {
+            "id": proj.id,
+            "path": proj.path,
+            "name": proj.name,
+            "chunkCount": proj.chunk_count,
+            "indexStatus": project_mod.status(),
+        })
+
+    def _handle_project_reindex(self) -> None:
+        active = project_mod.get_active()
+        if not active:
+            self.respond(400, {"error": "没有激活的项目"})
+            return
+        try:
+            proj = project_mod.open_project(
+                active["path"], self.registry, rebuild=True
+            )
+        except Exception as exc:  # noqa: BLE001
+            self.respond(500, {"error": f"{exc.__class__.__name__}: {exc}"})
+            return
+        self.respond(200, {
+            "id": proj.id,
+            "path": proj.path,
+            "indexStatus": project_mod.status(),
+        })
 
     def _handle_scratch_append(self) -> None:
         body = self.read_json()
@@ -341,11 +409,24 @@ class SteelG8Handler(BaseHTTPRequestHandler):
         soul_text = ensure_soul_file()
         context = _context_from_request(req, soul_text)
 
+        # RAG：当前有激活项目且索引完成，就检索 top-K 注入 system prompt
+        rag_hits = project_mod.retrieve(req.message, self.registry, top_k=5)
+        if rag_hits:
+            rag_block = "\n\n".join(
+                f"[{i+1}] {h.rel_path} (score={h.score})\n{h.text}"
+                for i, h in enumerate(rag_hits)
+            )
+            context.system_prompt = (
+                context.system_prompt
+                + "\n\n## 相关项目资料（按相似度 top-K，可引用）\n\n"
+                + rag_block
+            )
+
         decision = router.route(req.message, self.registry, explicit_model=req.model)
         provider: Provider | None = self.registry.providers.get(decision.provider) if decision.provider else None
 
         if stream:
-            self._stream_response(req.message, context, provider, decision)
+            self._stream_response(req.message, context, provider, decision, rag_hits=rag_hits)
         else:
             result = agent.run_once(req.message, context, provider, decision)
             # 写 usage log（非 mock 且有 usage 的时候记一条；mock 不计费）
@@ -359,6 +440,12 @@ class SteelG8Handler(BaseHTTPRequestHandler):
                 )
             payload = result.to_dict()
             payload["soulSummary"] = soul_summary(soul_text)
+            if rag_hits:
+                payload["ragHits"] = [
+                    {"relPath": h.rel_path, "chunkIdx": h.chunk_idx,
+                     "score": h.score, "preview": h.text[:240]}
+                    for h in rag_hits
+                ]
             self.respond(200, payload)
 
     def _stream_response(
@@ -367,6 +454,8 @@ class SteelG8Handler(BaseHTTPRequestHandler):
         context: agent.AgentContext,
         provider: Provider | None,
         decision: router.RoutingDecision,
+        *,
+        rag_hits: list | None = None,
     ) -> None:
         # SSE 头
         self.send_response(200)
@@ -383,6 +472,20 @@ class SteelG8Handler(BaseHTTPRequestHandler):
                 self.wfile.flush()
             except (BrokenPipeError, ConnectionResetError):
                 raise
+
+        # 先把 rag_hits 作为专门事件发出去（meta 事件之前前端就能挂 UI）
+        if rag_hits:
+            try:
+                write_event({
+                    "type": "rag",
+                    "hits": [
+                        {"relPath": h.rel_path, "chunkIdx": h.chunk_idx,
+                         "score": h.score, "preview": h.text[:240]}
+                        for h in rag_hits
+                    ],
+                })
+            except (BrokenPipeError, ConnectionResetError):
+                return
 
         captured_usage: dict[str, int] | None = None
         captured_model: str | None = None

@@ -48,6 +48,9 @@
     scratchAdd: $("scratch-add"),
     scratchToggle: $("scratch-toggle"),
     attachRow: $("attach-chip-row"),
+    projectPill: $("project-pill"),
+    projectName: $("project-name"),
+    projectChunks: $("project-chunks"),
   };
 
   // 独立召唤窗模式（#scratch）：把 chat 列隐藏，侧栏撑满窗口
@@ -372,6 +375,108 @@
 
   // ================== usage pill ==================
 
+  // ================== Project（RAG 项目）==================
+
+  async function refreshProject() {
+    if (!UI.projectPill) return;
+    try {
+      const r = await fetch(`${API_BASE}/project`, { cache: "no-store" });
+      if (!r.ok) return;
+      const j = await r.json();
+      const active = j.active;
+      if (!active) {
+        UI.projectPill.classList.add("is-empty");
+        UI.projectPill.classList.remove("indexing");
+        if (UI.projectName) UI.projectName.textContent = "未选项目";
+        if (UI.projectChunks) UI.projectChunks.textContent = "";
+        UI.projectPill.title = "点击打开一个文件夹";
+        return;
+      }
+      UI.projectPill.classList.remove("is-empty");
+      if (UI.projectName) UI.projectName.textContent = active.name || "项目";
+      const idx = active.indexStatus || {};
+      const isRunning = idx.state === "running";
+      const isError = idx.state === "error";
+      UI.projectPill.classList.toggle("indexing", isRunning);
+      UI.projectPill.classList.toggle("error", isError);
+      let chunkLabel;
+      if (isRunning) {
+        chunkLabel = `索引中 ${idx.embedded_chunks || 0}/${idx.total_chunks || "?"}`;
+      } else if (isError) {
+        chunkLabel = "索引失败 ⚠";
+      } else {
+        chunkLabel = `${active.chunkCount} chunks`;
+      }
+      if (UI.projectChunks) UI.projectChunks.textContent = chunkLabel;
+      const tip = [
+        `项目：${active.name}`,
+        `路径：${active.path}`,
+        `chunks：${active.chunkCount}`,
+        `状态：${idx.state || "?"}`,
+      ];
+      if (idx.error) tip.push(`错误：${idx.error}`);
+      UI.projectPill.title = tip.join("\n");
+    } catch (_) {}
+  }
+
+  if (UI.projectPill) {
+    UI.projectPill.addEventListener("click", async () => {
+      // 让 Swift 端负责 NSOpenPanel；这里没有跨桥没法直接弹出，
+      // 所以兜底提示用户走菜单栏
+      flashRouting("菜单栏 → 打开项目文件夹…（⌘⇧O）");
+    });
+  }
+
+  function flashRouting(msg) {
+    if (!UI.routing) return;
+    const prev = UI.routing.textContent;
+    UI.routing.textContent = msg;
+    setTimeout(() => (UI.routing.textContent = prev || ""), 2200);
+  }
+
+  // ================== RAG hits chips ==================
+
+  function renderRagChips(hits, targetBubble) {
+    if (!hits || !hits.length || !targetBubble) return;
+    const row = document.createElement("div");
+    row.className = "rag-chips";
+    hits.forEach((h, i) => {
+      const chip = document.createElement("span");
+      chip.className = "rag-chip";
+      chip.innerHTML = `
+        <span class="rag-path" title="${window.SteelMarkdown.escape(h.relPath)}">📎 ${window.SteelMarkdown.escape(h.relPath)}</span>
+        <span class="rag-score">${h.score}</span>
+      `;
+      chip.addEventListener("click", (ev) => showRagPopover(ev, h));
+      row.appendChild(chip);
+    });
+    targetBubble.parentElement.insertBefore(row, targetBubble.nextSibling);
+  }
+
+  function showRagPopover(ev, hit) {
+    document.querySelectorAll(".rag-popover").forEach((n) => n.remove());
+    const pop = document.createElement("div");
+    pop.className = "rag-popover";
+    pop.innerHTML = `
+      <div class="rp-head">
+        <span>${window.SteelMarkdown.escape(hit.relPath)} · chunk#${hit.chunkIdx}</span>
+        <span>score ${hit.score}</span>
+      </div>
+      <div class="rp-body">${window.SteelMarkdown.escape(hit.preview || "")}</div>
+    `;
+    document.body.appendChild(pop);
+    const rect = ev.currentTarget.getBoundingClientRect();
+    pop.style.left = Math.min(rect.left, window.innerWidth - 540) + "px";
+    pop.style.top = Math.min(rect.bottom + 6, window.innerHeight - 40 - pop.offsetHeight) + "px";
+    const off = (e) => {
+      if (!pop.contains(e.target)) {
+        pop.remove();
+        document.removeEventListener("click", off, true);
+      }
+    };
+    setTimeout(() => document.addEventListener("click", off, true), 0);
+  }
+
   async function refreshUsagePill() {
     if (!UI.usagePill) return;
     try {
@@ -631,6 +736,9 @@
             if (evt.type === "meta") {
               lastDecision = evt.decision;
               setRoutingHint(evt.decision);
+            } else if (evt.type === "rag") {
+              // 召回到相关项目 chunks，挂到 assistant 气泡下
+              renderRagChips(evt.hits || [], bubble);
             } else if (evt.type === "delta") {
               activeFullBuffer += evt.content || "";
               updateStreamingAssistant(bubble, activeFullBuffer);
@@ -788,21 +896,24 @@
     await refreshProviders();
     await refreshUsagePill();
     await refreshScratch();
-    // 每 8 秒 health，每 15 秒 usage，每 5 秒 scratch（同步给多窗口快一些）
+    await refreshProject();
+    // 每 8s health、15s usage、5s scratch、3s project（索引跑时能看到进度）
     setInterval(refreshHealth, 8000);
     setInterval(refreshUsagePill, 15000);
     setInterval(refreshScratch, 5000);
+    setInterval(refreshProject, 3000);
 
-    // 窗口重新被看见时立刻刷一轮，多窗口之间同步更即时
     document.addEventListener("visibilitychange", () => {
       if (!document.hidden) {
         refreshScratch();
         refreshUsagePill();
+        refreshProject();
       }
     });
     window.addEventListener("focus", () => {
       refreshScratch();
       refreshUsagePill();
+      refreshProject();
     });
   })();
 })();

@@ -101,6 +101,24 @@ final class AppController: ObservableObject {
         NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
     }
 
+    @objc func openProjectPicker() {
+        Task { [weak self] in
+            let result = await ProjectPicker.pickAndOpen()
+            switch result {
+            case .success(let proj):
+                await MainActor.run {
+                    self?.statusPresenter.present("项目已加载：\(proj.name)", on: self?.statusItem)
+                }
+            case .failure(let err):
+                await MainActor.run {
+                    if err.message != "已取消" {
+                        self?.statusPresenter.present("打开项目失败：\(err.message)", on: self?.statusItem)
+                    }
+                }
+            }
+        }
+    }
+
     @objc func quitApp() {
         pythonRuntime.stop()
         NSApplication.shared.terminate(nil)
@@ -148,6 +166,15 @@ final class AppController: ObservableObject {
         let openSoulItem = NSMenuItem(title: "打开 soul.md", action: #selector(openSoulFileMenuItem), keyEquivalent: "")
         openSoulItem.target = self
         menu.addItem(openSoulItem)
+
+        let openProjectItem = NSMenuItem(
+            title: "打开项目文件夹…",
+            action: #selector(openProjectPicker),
+            keyEquivalent: "o"
+        )
+        openProjectItem.target = self
+        openProjectItem.keyEquivalentModifierMask = [.command, .shift]
+        menu.addItem(openProjectItem)
 
         menu.addItem(.separator())
 

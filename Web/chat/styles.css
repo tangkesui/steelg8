@@ -242,6 +242,64 @@ html.scratch-only-mode .canvas { display: none; }
 }
 .scratch-composer .scratch-add:hover { background: var(--accent-hover); }
 
+/* ---------- RAG 引用 chips ---------- */
+.rag-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+  font-size: 11px;
+}
+.rag-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  padding: 3px 8px;
+  border-radius: 12px;
+  cursor: pointer;
+  max-width: 260px;
+  font-family: var(--font-mono);
+}
+.rag-chip:hover { border-color: var(--accent); color: var(--text); }
+.rag-chip .rag-path {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rag-chip .rag-score { color: var(--accent); }
+
+.rag-popover {
+  position: fixed;
+  z-index: 80;
+  max-width: 520px;
+  max-height: 50vh;
+  background: var(--bg-elevated);
+  border: 1px solid var(--accent);
+  border-radius: 10px;
+  padding: 12px 14px;
+  overflow: auto;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--text);
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.4);
+}
+.rag-popover .rp-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: 8px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.rag-popover .rp-body {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 /* ---------- attach chip ---------- */
 .attach-chip-row {
   display: flex;
@@ -584,6 +642,43 @@ html.scratch-only-mode .canvas { display: none; }
 .slogan { color: var(--text-dim); font-size: 12px; margin-left: 8px; }
 
 .controls { display: flex; align-items: center; gap: 12px; -webkit-app-region: no-drag; }
+
+.project-pill {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  font-size: 11px;
+  cursor: pointer;
+  user-select: none;
+  max-width: 240px;
+}
+.project-pill:hover { border-color: var(--accent); }
+.project-pill .project-name {
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 140px;
+}
+.project-pill.is-empty .project-name { color: var(--text-muted); }
+.project-pill .project-chunks {
+  font-family: var(--font-mono);
+  color: var(--text-muted);
+  font-size: 10px;
+}
+.project-pill.indexing .project-chunks {
+  color: var(--accent);
+}
+.project-pill.error {
+  border-color: var(--error);
+}
+.project-pill.error .project-chunks {
+  color: var(--error);
+}
 
 .usage-pill {
   display: flex;
