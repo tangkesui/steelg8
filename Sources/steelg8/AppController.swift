@@ -1,4 +1,5 @@
 import AppKit
+import Carbon
 import SwiftUI
 
 @MainActor
@@ -174,10 +175,18 @@ final class AppController: ObservableObject {
     }
 
     private func setupHotkey() {
-        HotkeyManager.shared.onHotkey = { [weak self] in
-            self?.startCapture()
-        }
-        HotkeyManager.shared.start()
+        // ⌘⇧D 截图 OCR（旧）
+        HotkeyManager.shared.register(
+            id: "capture-ocr",
+            binding: .init(keyCode: UInt32(kVK_ANSI_D), modifiers: UInt32(cmdKey | shiftKey)),
+            handler: { [weak self] in self?.startCapture() }
+        )
+        // ⌘⇧N 召唤 Scratch 捕获台独立窗
+        HotkeyManager.shared.register(
+            id: "scratch",
+            binding: .init(keyCode: UInt32(kVK_ANSI_N), modifiers: UInt32(cmdKey | shiftKey)),
+            handler: { ScratchSummonWindow.shared.toggle() }
+        )
     }
 
     private func setupCaptureFlow() {

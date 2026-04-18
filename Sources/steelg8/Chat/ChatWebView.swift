@@ -2,6 +2,22 @@ import AppKit
 import SwiftUI
 import WebKit
 
+/// 开发阶段禁用 WKWebView 持久 Cache，避免改了 HTML/JS/CSS 后加载不到最新版本。
+/// Release 可去掉。
+private func purgeWebViewCaches() {
+    let store = WKWebsiteDataStore.default()
+    let types: Set<String> = [
+        WKWebsiteDataTypeMemoryCache,
+        WKWebsiteDataTypeDiskCache,
+        WKWebsiteDataTypeOfflineWebApplicationCache,
+    ]
+    store.removeData(
+        ofTypes: types,
+        modifiedSince: Date(timeIntervalSince1970: 0),
+        completionHandler: {}
+    )
+}
+
 /// WKWebView 承载 Web/chat/index.html。Phase 1 的主交互窗口。
 ///
 /// 策略：
@@ -11,7 +27,10 @@ import WebKit
 struct ChatWebView: NSViewRepresentable {
 
     func makeNSView(context: Context) -> WKWebView {
+        purgeWebViewCaches()
+
         let config = WKWebViewConfiguration()
+        config.websiteDataStore = WKWebsiteDataStore.nonPersistent()
         let prefs = WKWebpagePreferences()
         prefs.allowsContentJavaScript = true
         config.defaultWebpagePreferences = prefs

@@ -30,28 +30,47 @@
     </div>
   </header>
 
-  <main id="messages" class="messages">
-    <div class="welcome">
-      <h2>欢迎回来</h2>
-      <p>有什么要让我干的？直接说。</p>
-      <div class="hints">
-        <button data-prompt="帮我写一段产品发布的推文，100 字左右">产品推文</button>
-        <button data-prompt="把下面这段中文翻译成英文：\n\n我们的目标是把文案工作者从模型厂商手里解放出来。">翻译任务</button>
-        <button data-prompt="steelg8 系统现在跑到哪一阶段了？简要说说。">状态询问</button>
+  <div class="body">
+    <aside id="scratch" class="scratch" data-mode="sidebar">
+      <div class="scratch-head">
+        <span class="scratch-title">📋 捕获台</span>
+        <button id="scratch-toggle" class="scratch-toggle" title="收起 / 展开">⟨</button>
       </div>
-    </div>
-  </main>
+      <div id="scratch-list" class="scratch-list">
+        <div class="scratch-empty">还没有内容。在下面随手写一条。</div>
+      </div>
+      <div class="scratch-composer">
+        <textarea id="scratch-input" rows="2" placeholder="随手记一条…（⌘+Enter 追加）"></textarea>
+        <button id="scratch-add" class="scratch-add">追加</button>
+      </div>
+    </aside>
 
-  <footer class="composer">
-    <div class="status-bar">
-      <span id="routing-hint" class="routing-hint"></span>
-      <span id="error-hint" class="error-hint"></span>
-    </div>
-    <div class="input-row">
-      <textarea id="input" rows="2" placeholder="输入消息，⌘/Ctrl + Enter 发送"></textarea>
-      <button id="send" class="send-btn">发送</button>
-    </div>
-  </footer>
+    <main class="chat-col">
+      <div id="messages" class="messages">
+        <div class="welcome">
+          <h2>欢迎回来</h2>
+          <p>有什么要让我干的？直接说。</p>
+          <div class="hints">
+            <button data-prompt="帮我写一段产品发布的推文，100 字左右">产品推文</button>
+            <button data-prompt="把下面这段中文翻译成英文：\n\n我们的目标是把文案工作者从模型厂商手里解放出来。">翻译任务</button>
+            <button data-prompt="steelg8 系统现在跑到哪一阶段了？简要说说。">状态询问</button>
+          </div>
+        </div>
+      </div>
+
+      <footer class="composer">
+        <div class="status-bar">
+          <span id="routing-hint" class="routing-hint"></span>
+          <span id="error-hint" class="error-hint"></span>
+        </div>
+        <div id="attach-chip-row" class="attach-chip-row"></div>
+        <div class="input-row">
+          <textarea id="input" rows="2" placeholder="输入消息，⌘/Ctrl + Enter 发送"></textarea>
+          <button id="send" class="send-btn">发送</button>
+        </div>
+      </footer>
+    </main>
+  </div>
 </div>
 
 <script src="markdown.js"></script>
