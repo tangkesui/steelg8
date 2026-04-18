@@ -1,15 +1,17 @@
 """
-Embedding 封装：当前只支持阿里云百炼（DashScope）Qwen Embedding 系列，
-通过 OpenAI 兼容模式调用。
+Embedding 封装：阿里云百炼（DashScope）Qwen Embedding 系列，走 OpenAI 兼容模式。
 
-默认走 **text-embedding-v4**（Qwen3-Embedding 系列）：
-- 最大 dimensions 2048，这里默认 1024（精度够 + 存储砍半）
-- 批大小 10（每次 input ≤10 条）
-- 单条最长 8192 token
-- 价格 ¥0.5/M token（比 v3 便宜 30%）
-- 过渡期 v3 仅限免费额度；新项目直接用 v4
+默认走 **text-embedding-v3**：不同账号在百炼看到的模型列表不一样，v3 是个人账号
+最常见且开通即用的版本（500K token 免费额度，付费 ¥0.7/M）。
 
-可通过环境变量 `STEELG8_EMBED_MODEL` 覆盖（v4 / v3 / v2）。
+企业账号/特定 region 看得到 v4（Qwen3-Embedding，¥0.5/M，2048 dims）的话，改
+环境变量：
+
+    STEELG8_EMBED_MODEL=text-embedding-v4 open steelg8.app
+
+维度默认 1024（v3 / v4 都支持），需要 768 / 512 压缩存储时可以：
+
+    STEELG8_EMBED_DIMS=512
 
 返回：list[list[float]]，每条对应 input 中一条文本的 embedding 向量。
 """
@@ -27,9 +29,9 @@ from providers import ProviderRegistry
 
 # ---- 默认配置 ----
 
-DEFAULT_MODEL = os.environ.get("STEELG8_EMBED_MODEL", "text-embedding-v4")
+DEFAULT_MODEL = os.environ.get("STEELG8_EMBED_MODEL", "text-embedding-v3")
 DEFAULT_DIMS = int(os.environ.get("STEELG8_EMBED_DIMS", "1024"))
-BATCH_SIZE = 10  # DashScope v4 推荐每批 ≤10 条
+BATCH_SIZE = 10  # DashScope 推荐每批 ≤10 条
 
 
 class EmbeddingError(RuntimeError):
