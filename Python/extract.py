@@ -2,7 +2,9 @@
 项目文件抽取与切块
 --------------------
 
-Phase 2 Step 1：只处理 .md / .txt。docx/pdf 留给 Step 2。
+Phase 2 Step 1：.md / .txt（stdlib）
+Phase 2 Step 2：+ .docx（通过 python-docx，需要 venv）
+Phase 2 Step 3：+ .pdf / .pptx（pypdf / python-pptx，后续）
 
 切块策略：
 - 先按段落（连续空行）粗分
@@ -11,8 +13,6 @@ Phase 2 Step 1：只处理 .md / .txt。docx/pdf 留给 Step 2。
 - 相邻 chunk 之间留约 100 字符重叠，减少"信息落在边界被切断"
 
 输出一个 Chunk dataclass 列表，供 embedding 和入库。
-
-关键设计：只靠 stdlib。
 """
 
 from __future__ import annotations
@@ -25,8 +25,17 @@ from typing import Iterable, Iterator
 
 # ---- 配置常量 ----
 
-# 默认允许的扩展名 Step 1 只开 md/txt
-SUPPORTED_EXT: set[str] = {".md", ".markdown", ".txt", ".mdx"}
+# 默认允许的扩展名。.docx 的支持在 python-docx 可导入时才真正生效（见 _has_docx）
+SUPPORTED_EXT: set[str] = {".md", ".markdown", ".txt", ".mdx", ".docx"}
+
+
+def _has_docx() -> bool:
+    """延迟导入 python-docx，避免 Phase 1 的 stdlib-only 用户被卡。"""
+    try:
+        import docx  # noqa: F401
+        return True
+    except ImportError:
+        return False
 
 # 目录黑名单（绝对跳过）
 SKIP_DIRS: set[str] = {
@@ -75,13 +84,21 @@ def walk_project(root: str) -> Iterator[FileRef]:
     if not root_path.is_dir():
         return
 
+    # docx 支持要等 python-docx 装上，venv 没 ready 时跳过
+    docx_ok = _has_docx()
+
     results: list[FileRef] = []
     for dirpath, dirnames, filenames in os.walk(root_path):
         # in-place 修改 dirnames 让 os.walk 不递归黑名单目录
         dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS and not d.startswith(".")]
         for fname in filenames:
+            # macOS / Office 临时锁文件
+            if fname.startswith("~$") or fname.startswith(".~"):
+                continue
             ext = Path(fname).suffix.lower()
             if ext not in SUPPORTED_EXT:
+                continue
+            if ext == ".docx" and not docx_ok:
                 continue
             abs_path = Path(dirpath) / fname
             try:
@@ -110,13 +127,102 @@ def walk_project(root: str) -> Iterator[FileRef]:
 
 
 def read_text(abs_path: str) -> str:
-    """按 utf-8 读文本，失败回退 latin-1。"""
+    """把支持的文件读成纯文本。根据扩展名走不同解析器。"""
+    ext = Path(abs_path).suffix.lower()
+    if ext == ".docx":
+        return read_docx(abs_path)
     try:
         with open(abs_path, "r", encoding="utf-8") as f:
             return f.read()
     except UnicodeDecodeError:
         with open(abs_path, "r", encoding="latin-1") as f:
             return f.read()
+
+
+def read_docx(abs_path: str) -> str:
+    """用 python-docx 把 docx 抽成纯文本：段落按出现顺序，表格转 Markdown 表。
+
+    未装 python-docx 时返回空字符串（RAG 层会跳过该条）。
+    """
+    try:
+        from docx import Document
+    except ImportError:
+        return ""
+
+    try:
+        doc = Document(abs_path)
+    except Exception:
+        return ""
+
+    out: list[str] = []
+
+    # body element 有 <w:p> 段落和 <w:tbl> 表格交替出现，保持顺序
+    body = doc.element.body
+    # XML 本地名映射
+    W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+
+    para_iter = iter(doc.paragraphs)
+    table_iter = iter(doc.tables)
+
+    for child in body.iterchildren():
+        tag = child.tag
+        if tag == f"{{{W_NS}}}p":
+            try:
+                p = next(para_iter)
+            except StopIteration:
+                continue
+            txt = (p.text or "").strip()
+            if not txt:
+                continue
+            style = getattr(p.style, "name", "") or ""
+            # 标题带 markdown 井号，便于下游 chunker 识别
+            if style.startswith("Heading 1"):
+                out.append(f"# {txt}")
+            elif style.startswith("Heading 2"):
+                out.append(f"## {txt}")
+            elif style.startswith("Heading 3"):
+                out.append(f"### {txt}")
+            elif style.startswith("Heading 4"):
+                out.append(f"#### {txt}")
+            else:
+                out.append(txt)
+        elif tag == f"{{{W_NS}}}tbl":
+            try:
+                tbl = next(table_iter)
+            except StopIteration:
+                continue
+            md = _docx_table_to_markdown(tbl)
+            if md:
+                out.append(md)
+
+    return "\n\n".join(out)
+
+
+def _docx_table_to_markdown(tbl: object) -> str:
+    """转成 Markdown pipe table。首行当表头；若表头和后续行列数不齐，按最长列数补空。"""
+    rows: list[list[str]] = []
+    for row in getattr(tbl, "rows", []):
+        cells = [(c.text or "").strip().replace("\n", " ").replace("|", "\\|") for c in row.cells]
+        rows.append(cells)
+    if not rows:
+        return ""
+    # 去掉完全空的行
+    rows = [r for r in rows if any(cell for cell in r)]
+    if not rows:
+        return ""
+
+    max_cols = max(len(r) for r in rows)
+    rows = [r + [""] * (max_cols - len(r)) for r in rows]
+
+    header = rows[0]
+    body = rows[1:]
+    md_lines = [
+        "| " + " | ".join(header) + " |",
+        "| " + " | ".join(["---"] * max_cols) + " |",
+    ]
+    for r in body:
+        md_lines.append("| " + " | ".join(r) + " |")
+    return "\n".join(md_lines)
 
 
 def chunk_text(

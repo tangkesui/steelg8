@@ -8,6 +8,11 @@
 # 目前核心服务仍走 stdlib（urllib + json + http.server）；
 # 下面这些只在 RAG/项目索引路径上用到
 
-# ---- PDF / docx 文本抽取（Phase 2 Step 2 再开启）----
+# ---- docx 抽取 + 模板填充（Phase 2 Step 2）----
+python-docx>=1.1
+
+# ---- PDF 文本抽取（Phase 2 Step 3 再开启）----
 # pypdf>=4.3
-# python-docx>=1.1
+
+# ---- pptx（Phase 2 Step 4）----
+# python-pptx>=1.0

@@ -55,9 +55,20 @@ final class PythonRuntime {
             throw PythonRuntimeError.serverScriptMissing(scriptURL.path)
         }
 
+        // 优先用 .venv/bin/python3（装了 python-docx 等依赖）；
+        // 没有就回退到系统 python3（只会跑 stdlib 的旧路径）
+        let venvPython = appRootURL
+            .appending(path: ".venv")
+            .appending(path: "bin")
+            .appending(path: "python3")
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        process.arguments = ["python3", scriptURL.path, "--port", "\(Self.defaultPort)"]
+        if fileManager.fileExists(atPath: venvPython.path) {
+            process.executableURL = venvPython
+            process.arguments = [scriptURL.path, "--port", "\(Self.defaultPort)"]
+        } else {
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+            process.arguments = ["python3", scriptURL.path, "--port", "\(Self.defaultPort)"]
+        }
         process.currentDirectoryURL = appRootURL
         process.environment = ProcessInfo.processInfo.environment.merging([
             "PYTHONUNBUFFERED": "1",

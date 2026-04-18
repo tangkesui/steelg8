@@ -34,6 +34,7 @@ import agent  # noqa: E402
 import usage  # noqa: E402
 import scratch  # noqa: E402
 import project as project_mod  # noqa: E402
+from skills import docx_fill, docx_grow  # noqa: E402
 
 
 def app_root() -> Path:
@@ -260,6 +261,25 @@ class SteelG8Handler(BaseHTTPRequestHandler):
             self._handle_project_reindex()
             return
 
+        if self.path == "/skills/docx/placeholders":
+            self._handle_docx_placeholders()
+            return
+        if self.path == "/skills/docx/fill":
+            self._handle_docx_fill()
+            return
+        if self.path == "/skills/docx/headings":
+            self._handle_docx_headings()
+            return
+        if self.path == "/skills/docx/insert-section":
+            self._handle_docx_insert_section()
+            return
+        if self.path == "/skills/docx/append-paragraphs":
+            self._handle_docx_append_paragraphs()
+            return
+        if self.path == "/skills/docx/append-row":
+            self._handle_docx_append_row()
+            return
+
         self.respond(404, {"error": "not found"})
 
     def do_DELETE(self) -> None:  # noqa: N802
@@ -318,6 +338,100 @@ class SteelG8Handler(BaseHTTPRequestHandler):
             "path": proj.path,
             "indexStatus": project_mod.status(),
         })
+
+    # ------------------- docx skills -------------------
+
+    def _handle_docx_placeholders(self) -> None:
+        body = self.read_json() or {}
+        path = str(body.get("path", "")).strip()
+        if not path:
+            self.respond(400, {"error": "path is required"})
+            return
+        try:
+            names = docx_fill.list_placeholders(path)
+        except docx_fill.DocxFillError as exc:
+            self.respond(400, {"error": str(exc)})
+            return
+        self.respond(200, {"placeholders": names})
+
+    def _handle_docx_fill(self) -> None:
+        body = self.read_json() or {}
+        template = str(body.get("template", "")).strip()
+        data = body.get("data") or {}
+        output = body.get("output") or None
+        if not template:
+            self.respond(400, {"error": "template is required"})
+            return
+        try:
+            r = docx_fill.fill(template, data, output_path=output)
+        except docx_fill.DocxFillError as exc:
+            self.respond(400, {"error": str(exc)})
+            return
+        self.respond(200, {
+            "output": r.output_path,
+            "replaced": r.replaced_count,
+            "missing": r.missing_keys,
+            "leftover": r.leftover_placeholders,
+        })
+
+    def _handle_docx_headings(self) -> None:
+        body = self.read_json() or {}
+        path = str(body.get("path", "")).strip()
+        if not path:
+            self.respond(400, {"error": "path is required"})
+            return
+        try:
+            hs = docx_grow.list_headings(path)
+        except docx_grow.DocxGrowError as exc:
+            self.respond(400, {"error": str(exc)})
+            return
+        self.respond(200, {"headings": hs})
+
+    def _handle_docx_insert_section(self) -> None:
+        body = self.read_json() or {}
+        try:
+            r = docx_grow.insert_section_after_heading(
+                body["path"],
+                after_heading=body["afterHeading"],
+                new_heading=body["newHeading"],
+                new_heading_level=int(body.get("newHeadingLevel", 2)),
+                paragraphs=body.get("paragraphs") or [],
+                anchor_level=body.get("anchorLevel"),
+                output_path=body.get("output"),
+            )
+        except (KeyError, docx_grow.DocxGrowError) as exc:
+            self.respond(400, {"error": str(exc)})
+            return
+        self.respond(200, {"output": r.output_path, "inserted": r.inserted_elements, "notes": r.notes})
+
+    def _handle_docx_append_paragraphs(self) -> None:
+        body = self.read_json() or {}
+        try:
+            r = docx_grow.append_paragraphs_after_heading(
+                body["path"],
+                after_heading=body["afterHeading"],
+                paragraphs=body["paragraphs"],
+                anchor_level=body.get("anchorLevel"),
+                output_path=body.get("output"),
+            )
+        except (KeyError, docx_grow.DocxGrowError) as exc:
+            self.respond(400, {"error": str(exc)})
+            return
+        self.respond(200, {"output": r.output_path, "inserted": r.inserted_elements})
+
+    def _handle_docx_append_row(self) -> None:
+        body = self.read_json() or {}
+        try:
+            r = docx_grow.append_table_row(
+                body["path"],
+                table_index=int(body.get("tableIndex", 0)),
+                cells=body["cells"],
+                output_path=body.get("output"),
+            )
+        except (KeyError, docx_grow.DocxGrowError) as exc:
+            self.respond(400, {"error": str(exc)})
+            return
+        self.respond(200, {"output": r.output_path, "inserted": r.inserted_elements})
 
     def _handle_scratch_append(self) -> None:
         body = self.read_json()

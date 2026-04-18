@@ -7,7 +7,24 @@ CONTENTS="${APP_DIR}/Contents"
 MACOS="${CONTENTS}/MacOS"
 RESOURCES="${CONTENTS}/Resources"
 
-# Build
+VENV_DIR=".venv"
+REQ_FILE="Python/requirements.txt"
+VENV_STAMP="${VENV_DIR}/.installed-stamp"
+
+# 1. 准备 Python venv（Phase 2 起引入 pip 依赖：python-docx 等）
+if [ ! -d "${VENV_DIR}" ]; then
+    echo "🐍 创建 venv..."
+    python3 -m venv "${VENV_DIR}"
+fi
+# 只有 requirements.txt 比 stamp 新才重新安装，省事
+if [ "${REQ_FILE}" -nt "${VENV_STAMP}" ]; then
+    echo "🐍 安装/更新 Python 依赖..."
+    "${VENV_DIR}/bin/pip" install --upgrade pip >/dev/null
+    "${VENV_DIR}/bin/pip" install -r "${REQ_FILE}"
+    touch "${VENV_STAMP}"
+fi
+
+# 2. Swift Build
 echo "🔨 编译中..."
 DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
   /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swift build 2>&1
@@ -55,10 +72,14 @@ cp ".build/debug/${APP_NAME}" "${MACOS}/${APP_NAME}"
 echo "📦 复制 Python / Web 资源..."
 rm -rf "${RESOURCES}/Python" "${RESOURCES}/Web" "${RESOURCES}/prompts" "${RESOURCES}/config"
 mkdir -p "${RESOURCES}/Python" "${RESOURCES}/Web/chat" "${RESOURCES}/prompts" "${RESOURCES}/config"
-cp Python/*.py       "${RESOURCES}/Python/"
+cp -R Python/.       "${RESOURCES}/Python/"
 cp -R Web/chat/.     "${RESOURCES}/Web/chat/" 2>/dev/null || true
 cp prompts/*         "${RESOURCES}/prompts/"
 cp config/*          "${RESOURCES}/config/"
+
+# venv 带进 .app 里，保证 app 启动时能找到依赖
+rm -rf "${RESOURCES}/.venv"
+cp -R "${VENV_DIR}" "${RESOURCES}/.venv"
 
 # Sign
 echo "🔏 签名..."
