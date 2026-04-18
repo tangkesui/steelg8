@@ -345,6 +345,46 @@ html.scratch-only-mode .sp-divider { display: none; }
 }
 .scratch-composer .scratch-add:hover { background: var(--accent-hover); }
 
+/* ---------- Tool call chips ---------- */
+.tool-chips {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 6px;
+  font-size: 11.5px;
+  font-family: var(--font-mono);
+}
+.tool-chip {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  padding: 5px 10px;
+  border-radius: 6px;
+  max-width: 520px;
+}
+.tool-chip .tool-icon { font-size: 12px; line-height: 1.4; }
+.tool-chip .tool-name { color: var(--text); font-weight: 600; }
+.tool-chip .tool-args,
+.tool-chip .tool-result {
+  color: var(--text-dim);
+  flex: 1;
+  overflow: hidden;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.tool-chip.tool-running { border-color: var(--accent); }
+.tool-chip.tool-running .tool-icon::after {
+  content: " ⏳";
+}
+.tool-chip.tool-ok { border-color: var(--success); }
+.tool-chip.tool-err {
+  border-color: var(--error);
+  color: var(--error);
+}
+
 /* ---------- RAG 引用 chips ---------- */
 .rag-chips {
   display: flex;

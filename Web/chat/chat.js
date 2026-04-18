@@ -686,6 +686,56 @@
     UI.messages.scrollTop = UI.messages.scrollHeight;
   }
 
+  // ---- Tool call chips ----
+  function ensureToolRow(bubble) {
+    const content = bubble.parentElement;
+    let row = content.querySelector(".tool-chips");
+    if (!row) {
+      row = document.createElement("div");
+      row.className = "tool-chips";
+      bubble.parentElement.insertBefore(row, bubble.nextSibling);
+    }
+    return row;
+  }
+
+  function renderToolChip(bubble, call) {
+    const row = ensureToolRow(bubble);
+    const chip = document.createElement("div");
+    chip.className = "tool-chip tool-running";
+    chip.setAttribute("data-tool-id", call.id || "");
+    const argsPreview = compactJSON(call.args || {}, 120);
+    chip.innerHTML = `
+      <span class="tool-icon">🛠️</span>
+      <span><span class="tool-name">${window.SteelMarkdown.escape(call.name || "?")}</span>
+        <span class="tool-args">${window.SteelMarkdown.escape(argsPreview)}</span></span>
+    `;
+    row.appendChild(chip);
+  }
+
+  function updateToolChip(bubble, id, result) {
+    const content = bubble.parentElement;
+    const chip = content.querySelector(`.tool-chip[data-tool-id="${id || ""}"]`);
+    if (!chip) return;
+    chip.classList.remove("tool-running");
+    const isErr = result && result.error;
+    chip.classList.add(isErr ? "tool-err" : "tool-ok");
+    const preview = compactJSON(result || {}, 220);
+    const resultEl = document.createElement("div");
+    resultEl.className = "tool-result";
+    resultEl.textContent = (isErr ? "❌ " : "✓ ") + preview;
+    chip.appendChild(resultEl);
+  }
+
+  function compactJSON(obj, maxLen) {
+    try {
+      const s = JSON.stringify(obj, null, 0);
+      if (s.length <= maxLen) return s;
+      return s.slice(0, maxLen) + "…";
+    } catch (_) {
+      return String(obj);
+    }
+  }
+
   // ---- Canvas 集成 ----
   function attachCanvasActions(actionsEl, fullText) {
     if (!actionsEl || !fullText) return;
@@ -840,6 +890,15 @@
             } else if (evt.type === "rag") {
               // 召回到相关项目 chunks，挂到 assistant 气泡下
               renderRagChips(evt.hits || [], bubble);
+            } else if (evt.type === "tool_start") {
+              renderToolChip(bubble, {
+                id: evt.id,
+                name: evt.name,
+                args: evt.args,
+                state: "running",
+              });
+            } else if (evt.type === "tool_result") {
+              updateToolChip(bubble, evt.id, evt.result);
             } else if (evt.type === "delta") {
               activeFullBuffer += evt.content || "";
               updateStreamingAssistant(bubble, activeFullBuffer);

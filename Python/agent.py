@@ -63,6 +63,7 @@ class AgentResult:
     source: str = ""
     usage: dict[str, int] | None = None  # {prompt_tokens, completion_tokens, total_tokens}
     cost_usd: float = 0.0
+    tool_calls: list[dict[str, Any]] = field(default_factory=list)  # 历次 tool call + result
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -75,10 +76,14 @@ class AgentResult:
             "error": self.error,
             "usage": self.usage,
             "costUsd": round(self.cost_usd, 8),
+            "toolCalls": list(self.tool_calls),
         }
 
 
 # ---------- 非流式 ----------
+
+
+MAX_TOOL_ITER = 6    # 防止 LLM 卡在循环里；一般 1~2 轮就够
 
 
 def run_once(
@@ -89,6 +94,8 @@ def run_once(
     *,
     temperature: float = 0.4,
     timeout: int = 30,
+    tools: list[dict[str, Any]] | None = None,
+    tool_dispatch: Any = None,
 ) -> AgentResult:
     if provider is None or decision.layer == "mock":
         return AgentResult(
@@ -97,42 +104,84 @@ def run_once(
             source="mock-fallback",
         )
 
-    payload = {
-        "model": decision.model or (provider.models[0] if provider.models else ""),
-        "messages": context.build_messages(user_message),
-        "temperature": temperature,
-        "stream": False,
-    }
+    messages = context.build_messages(user_message)
+    accumulated_tool_calls: list[dict[str, Any]] = []
+    total_prompt = total_completion = 0
+    total_cost = 0.0
+    resolved_model = decision.model or (provider.models[0] if provider.models else "")
+    final_content = ""
+    last_error: str | None = None
 
-    try:
-        body = _post_json(
-            f"{provider.base_url}/chat/completions",
-            payload,
-            api_key=provider.api_key(),
-            timeout=timeout,
-        )
-    except Exception as exc:  # noqa: BLE001
-        return AgentResult(
-            content=_mock_content(user_message, decision, error=str(exc)),
-            decision=decision,
-            error=str(exc),
-            source="mock-fallback",
+    for _ in range(MAX_TOOL_ITER):
+        payload: dict[str, Any] = {
+            "model": decision.model or (provider.models[0] if provider.models else ""),
+            "messages": messages,
+            "temperature": temperature,
+            "stream": False,
+        }
+        if tools:
+            payload["tools"] = tools
+            payload["tool_choice"] = "auto"
+
+        try:
+            body = _post_json(
+                f"{provider.base_url}/chat/completions",
+                payload,
+                api_key=provider.api_key(),
+                timeout=timeout,
+            )
+        except Exception as exc:  # noqa: BLE001
+            last_error = str(exc)
+            break
+
+        msg = body.get("choices", [{}])[0].get("message", {}) or {}
+        resolved_model = body.get("model") or payload["model"]
+        usage = _extract_usage(body.get("usage"))
+        if usage:
+            total_prompt += usage.get("prompt_tokens", 0)
+            total_completion += usage.get("completion_tokens", 0)
+        total_cost += pricing.cost_usd(
+            resolved_model,
+            provider.name,
+            usage.get("prompt_tokens", 0) if usage else 0,
+            usage.get("completion_tokens", 0) if usage else 0,
         )
 
-    content = (
-        body.get("choices", [{}])[0]
-        .get("message", {})
-        .get("content", "")
-        .strip()
-    )
-    resolved_model = body.get("model") or payload["model"]
-    usage = _extract_usage(body.get("usage"))
-    cost = pricing.cost_usd(
-        resolved_model,
-        provider.name,
-        usage.get("prompt_tokens", 0) if usage else 0,
-        usage.get("completion_tokens", 0) if usage else 0,
-    )
+        tcs = msg.get("tool_calls") or []
+        if tcs and tool_dispatch:
+            # 追加 assistant turn（带 tool_calls）
+            messages.append({
+                "role": "assistant",
+                "content": msg.get("content") or "",
+                "tool_calls": tcs,
+            })
+            for tc in tcs:
+                fname = (tc.get("function") or {}).get("name", "")
+                raw_args = (tc.get("function") or {}).get("arguments", "{}")
+                try:
+                    args = json.loads(raw_args) if isinstance(raw_args, str) else (raw_args or {})
+                except json.JSONDecodeError:
+                    args = {}
+                result = tool_dispatch(fname, args)
+                accumulated_tool_calls.append({
+                    "id": tc.get("id"),
+                    "name": fname,
+                    "args": args,
+                    "result": result,
+                })
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tc.get("id"),
+                    "content": json.dumps(result, ensure_ascii=False),
+                })
+            # 继续 loop，让 LLM 看到 tool result 生成最终答案
+            continue
+
+        # 没有 tool_calls → 终局
+        final_content = (msg.get("content") or "").strip()
+        break
+    else:
+        last_error = f"tool loop 超过 {MAX_TOOL_ITER} 轮未收敛"
 
     final_decision = RoutingDecision(
         model=resolved_model,
@@ -141,11 +190,16 @@ def run_once(
         reason=decision.reason,
     )
     return AgentResult(
-        content=content or "上游返回了空响应。",
+        content=final_content or (
+            _mock_content(user_message, decision, error=last_error) if last_error else "上游返回了空响应。"
+        ),
         decision=final_decision,
-        source=f"provider:{provider.name}",
-        usage=usage,
-        cost_usd=cost,
+        source=f"provider:{provider.name}" if not last_error else "mock-fallback",
+        usage={"prompt_tokens": total_prompt, "completion_tokens": total_completion,
+               "total_tokens": total_prompt + total_completion} if (total_prompt or total_completion) else None,
+        cost_usd=total_cost,
+        tool_calls=accumulated_tool_calls,
+        error=last_error,
     )
 
 
@@ -160,6 +214,8 @@ def run_stream(
     *,
     temperature: float = 0.4,
     timeout: int = 60,
+    tools: list[dict[str, Any]] | None = None,
+    tool_dispatch: Any = None,
 ) -> Iterator[dict[str, Any]]:
     yield {"type": "meta", "decision": decision.to_dict()}
 
@@ -175,60 +231,134 @@ def run_stream(
         yield {"type": "done", "full": full, "source": "mock-fallback"}
         return
 
-    payload = {
-        "model": decision.model or (provider.models[0] if provider.models else ""),
-        "messages": context.build_messages(user_message),
-        "temperature": temperature,
-        "stream": True,
-        # OpenAI-compat：要 usage 必须显式请求；OpenRouter/DeepSeek/Qwen/Kimi 都认
-        "stream_options": {"include_usage": True},
-    }
-
-    buffered: list[str] = []
-    final_usage: dict[str, int] | None = None
+    messages = context.build_messages(user_message)
+    buffered: list[str] = []                    # 跨所有 iter 的 assistant 文本
+    iter_buffered: list[str]
+    total_prompt = total_completion = 0
+    total_cost = 0.0
     resolved_model: str | None = None
 
-    try:
-        for chunk in _post_sse(
-            f"{provider.base_url}/chat/completions",
-            payload,
-            api_key=provider.api_key(),
-            timeout=timeout,
-        ):
-            # _post_sse yield 结构：{"delta":..., "usage":..., "model":...}
-            if chunk.get("model") and not resolved_model:
-                resolved_model = chunk["model"]
-            if chunk.get("delta"):
-                text = chunk["delta"]
-                buffered.append(text)
-                yield {"type": "delta", "content": text}
-            if chunk.get("usage"):
-                final_usage = _extract_usage(chunk["usage"])
-    except Exception as exc:  # noqa: BLE001
-        yield {"type": "error", "error": str(exc)}
-        tail = _mock_content(user_message, decision, error=str(exc))
-        yield {"type": "delta", "content": f"\n\n[stream 失败，降级 mock] {tail}"}
-        yield {"type": "done", "full": "".join(buffered) + f"\n\n{tail}", "source": "mock-fallback"}
-        return
+    for _ in range(MAX_TOOL_ITER):
+        payload: dict[str, Any] = {
+            "model": decision.model or (provider.models[0] if provider.models else ""),
+            "messages": messages,
+            "temperature": temperature,
+            "stream": True,
+            "stream_options": {"include_usage": True},
+        }
+        if tools:
+            payload["tools"] = tools
+            payload["tool_choice"] = "auto"
 
-    # usage 事件放在 done 之前，前端收到后可以即时更新金额
-    model_id = resolved_model or payload["model"]
-    prompt_tk = final_usage.get("prompt_tokens", 0) if final_usage else 0
-    comp_tk = final_usage.get("completion_tokens", 0) if final_usage else 0
-    cost = pricing.cost_usd(model_id, provider.name, prompt_tk, comp_tk)
+        # 本轮 assistant 文本 / tool_calls 的聚合
+        iter_buffered = []
+        tc_accum: dict[int, dict[str, Any]] = {}   # index → {id, type, function.name, function.arguments}
+        iter_usage: dict[str, int] | None = None
+        iter_model: str | None = None
 
+        try:
+            for chunk in _post_sse(
+                f"{provider.base_url}/chat/completions",
+                payload,
+                api_key=provider.api_key(),
+                timeout=timeout,
+            ):
+                if chunk.get("model") and not iter_model:
+                    iter_model = chunk["model"]
+                    resolved_model = chunk["model"]
+                if chunk.get("delta"):
+                    text = chunk["delta"]
+                    iter_buffered.append(text)
+                    buffered.append(text)
+                    yield {"type": "delta", "content": text}
+                if chunk.get("tool_calls_delta"):
+                    _merge_tool_calls_delta(tc_accum, chunk["tool_calls_delta"])
+                if chunk.get("usage"):
+                    iter_usage = _extract_usage(chunk["usage"])
+        except Exception as exc:  # noqa: BLE001
+            yield {"type": "error", "error": str(exc)}
+            tail = _mock_content(user_message, decision, error=str(exc))
+            yield {"type": "delta", "content": f"\n\n[stream 失败，降级 mock] {tail}"}
+            yield {"type": "done", "full": "".join(buffered) + f"\n\n{tail}", "source": "mock-fallback"}
+            return
+
+        # usage 统计
+        if iter_usage:
+            total_prompt += iter_usage.get("prompt_tokens", 0)
+            total_completion += iter_usage.get("completion_tokens", 0)
+        total_cost += pricing.cost_usd(
+            iter_model or payload["model"],
+            provider.name,
+            iter_usage.get("prompt_tokens", 0) if iter_usage else 0,
+            iter_usage.get("completion_tokens", 0) if iter_usage else 0,
+        )
+
+        # 本轮 tool calls 收尾
+        if tc_accum and tool_dispatch:
+            tool_calls_list = [tc_accum[i] for i in sorted(tc_accum.keys())]
+            # 补齐 arguments 可能是空字符串
+            for tc in tool_calls_list:
+                tc.setdefault("type", "function")
+                tc.setdefault("id", tc.get("id") or f"call_{id(tc)}")
+                tc.setdefault("function", {"name": "", "arguments": ""})
+                tc["function"].setdefault("arguments", "")
+            messages.append({
+                "role": "assistant",
+                "content": "".join(iter_buffered),
+                "tool_calls": tool_calls_list,
+            })
+
+            for tc in tool_calls_list:
+                fname = tc["function"].get("name") or ""
+                raw_args = tc["function"].get("arguments") or "{}"
+                try:
+                    args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
+                except json.JSONDecodeError:
+                    args = {}
+                yield {"type": "tool_start", "id": tc.get("id"), "name": fname, "args": args}
+                result = tool_dispatch(fname, args)
+                yield {"type": "tool_result", "id": tc.get("id"), "name": fname, "result": result}
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tc.get("id"),
+                    "content": json.dumps(result, ensure_ascii=False),
+                })
+            # 继续下一轮让 LLM 基于 tool result 继续输出
+            continue
+
+        # 没有 tool_calls：终局
+        break
+
+    # 聚合 usage + done
+    model_id = resolved_model or (decision.model or (provider.models[0] if provider.models else ""))
     yield {
         "type": "usage",
-        "usage": final_usage or {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
-        "costUsd": round(cost, 8),
+        "usage": {"prompt_tokens": total_prompt, "completion_tokens": total_completion,
+                  "total_tokens": total_prompt + total_completion},
+        "costUsd": round(total_cost, 8),
         "model": model_id,
     }
-
     yield {
         "type": "done",
         "full": "".join(buffered),
         "source": f"provider:{provider.name}",
     }
+
+
+def _merge_tool_calls_delta(accum: dict[int, dict[str, Any]], delta: list[dict[str, Any]]) -> None:
+    """把 SSE 里 tool_calls 的增量 append 到 accum（按 index 聚合）。"""
+    for d in delta:
+        idx = int(d.get("index", 0))
+        slot = accum.setdefault(idx, {"function": {"name": "", "arguments": ""}})
+        if d.get("id"):
+            slot["id"] = d["id"]
+        if d.get("type"):
+            slot["type"] = d["type"]
+        fn = d.get("function") or {}
+        if fn.get("name"):
+            slot["function"]["name"] = (slot["function"].get("name") or "") + fn["name"]
+        if fn.get("arguments"):
+            slot["function"]["arguments"] = (slot["function"].get("arguments") or "") + fn["arguments"]
 
 
 # ---------- helpers ----------
@@ -314,6 +444,9 @@ def _post_sse(
                 content = delta.get("content")
                 if content:
                     out["delta"] = content
+                tc_delta = delta.get("tool_calls")
+                if tc_delta:
+                    out["tool_calls_delta"] = tc_delta
             if evt.get("usage"):
                 out["usage"] = evt["usage"]
             if out:

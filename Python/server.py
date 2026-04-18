@@ -35,6 +35,7 @@ import usage  # noqa: E402
 import scratch  # noqa: E402
 import project as project_mod  # noqa: E402
 from skills import docx_fill, docx_grow  # noqa: E402
+from skills import registry as tool_registry  # noqa: E402
 
 
 def app_root() -> Path:
@@ -539,10 +540,21 @@ class SteelG8Handler(BaseHTTPRequestHandler):
         decision = router.route(req.message, self.registry, explicit_model=req.model)
         provider: Provider | None = self.registry.providers.get(decision.provider) if decision.provider else None
 
+        # Tools：目前只要用户能看到 docx skill 就挂上；token 开销 ~500，flash-lite
+        # 跑一次 ¥0.001 级别，值得。后续如果要按对话意图切，在这里筛。
+        tools = tool_registry.tool_schemas()
+        tool_dispatch = tool_registry.dispatch
+
         if stream:
-            self._stream_response(req.message, context, provider, decision, rag_hits=rag_hits)
+            self._stream_response(
+                req.message, context, provider, decision,
+                rag_hits=rag_hits, tools=tools, tool_dispatch=tool_dispatch,
+            )
         else:
-            result = agent.run_once(req.message, context, provider, decision)
+            result = agent.run_once(
+                req.message, context, provider, decision,
+                tools=tools, tool_dispatch=tool_dispatch,
+            )
             # 写 usage log（非 mock 且有 usage 的时候记一条；mock 不计费）
             if result.source.startswith("provider:") and result.usage:
                 usage.record(
@@ -570,6 +582,8 @@ class SteelG8Handler(BaseHTTPRequestHandler):
         decision: router.RoutingDecision,
         *,
         rag_hits: list | None = None,
+        tools: list | None = None,
+        tool_dispatch: Any = None,
     ) -> None:
         # SSE 头
         self.send_response(200)
@@ -604,7 +618,10 @@ class SteelG8Handler(BaseHTTPRequestHandler):
         captured_usage: dict[str, int] | None = None
         captured_model: str | None = None
         try:
-            for event in agent.run_stream(message, context, provider, decision):
+            for event in agent.run_stream(
+                message, context, provider, decision,
+                tools=tools, tool_dispatch=tool_dispatch,
+            ):
                 # 捕获 usage 事件用于写 log（event 本身正常下发给前端）
                 if event.get("type") == "usage":
                     captured_usage = event.get("usage")
