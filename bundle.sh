@@ -60,6 +60,10 @@ cat > "${CONTENTS}/Info.plist" << 'PLIST'
     <true/>
     <key>NSAppleEventsUsageDescription</key>
     <string>steelg8 需要调用 Apple 备忘录来把捕获台内容存到你指定的文件夹里，iCloud 自动同步到手机。</string>
+    <key>CFBundleIconName</key>
+    <string>AppIcon</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
 </dict>
 </plist>
 PLIST
@@ -76,6 +80,11 @@ cp -R Python/.       "${RESOURCES}/Python/"
 cp -R Web/chat/.     "${RESOURCES}/Web/chat/" 2>/dev/null || true
 cp prompts/*         "${RESOURCES}/prompts/"
 cp config/*          "${RESOURCES}/config/"
+
+# App 图标
+if [ -f "assets/AppIcon.icns" ]; then
+    cp assets/AppIcon.icns "${RESOURCES}/AppIcon.icns"
+fi
 
 # venv 带进 .app 里，保证 app 启动时能找到依赖
 rm -rf "${RESOURCES}/.venv"

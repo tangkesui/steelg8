@@ -55,3 +55,6 @@ logs/
 
 # ---------- One-off internal docs ----------
 PUSH_TO_GITHUB.md
+
+# ---- App icon build artifacts ----
+assets/AppIcon.iconset/

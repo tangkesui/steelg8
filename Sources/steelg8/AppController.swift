@@ -187,7 +187,9 @@ final class AppController: ObservableObject {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
 
         if let button = item.button {
-            if let image = NSImage(systemSymbolName: "hammer.circle", accessibilityDescription: "steelg8") {
+            // 和 app icon 呼应：金库的四辐转盘。
+            // SF Symbols 里 "circle.grid.cross" 是十字握柄的圆框，最接近那个保险柜形象
+            if let image = NSImage(systemSymbolName: "circle.grid.cross", accessibilityDescription: "steelg8") {
                 button.image = image
             } else {
                 button.title = "steelg8"
