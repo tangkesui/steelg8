@@ -22,7 +22,7 @@ private func purgeWebViewCaches() {
 ///
 /// 策略：
 /// - 本地 file:// 协议加载，WKWebView 允许访问到整个 Web/chat 目录（loadFileURL(allowingReadAccessTo:)）
-/// - 不注入 JS，chat.js 自己去 http://127.0.0.1:8765 拉后端
+/// - 注入当前 kernel 端口，chat.js 再用 localhost 拉后端
 /// - 开发阶段允许 web inspector；release 再关
 struct ChatWebView: NSViewRepresentable {
 
@@ -41,12 +41,21 @@ struct ChatWebView: NSViewRepresentable {
 
         // 注入 JS 桥：前端调 `window.webkit.messageHandlers.steelg8.postMessage(...)`
         config.userContentController.add(context.coordinator, name: "steelg8")
+        config.userContentController.addUserScript(
+            WKUserScript(
+                source: KernelConfig.webBootstrapScript,
+                injectionTime: .atDocumentStart,
+                forMainFrameOnly: true
+            )
+        )
 
         // 允许 file:// 访问本地其他文件、跨源读 127.0.0.1（本地内核）
         // 这些都是 WKWebView 未公开的 KVC key，在 macOS 14+ 仍可用
         config.setValue(true, forKey: "allowUniversalAccessFromFileURLs")
         config.preferences.setValue(true, forKey: "allowFileAccessFromFileURLs")
+        #if DEBUG
         config.preferences.setValue(true, forKey: "developerExtrasEnabled")
+        #endif
 
         let webView = WKWebView(frame: .zero, configuration: config)
         webView.setValue(false, forKey: "drawsBackground") // 让 SwiftUI 的背景色透出来
@@ -54,9 +63,11 @@ struct ChatWebView: NSViewRepresentable {
         webView.allowsBackForwardNavigationGestures = false
         webView.uiDelegate = context.coordinator   // 让 JS 的 alert/confirm/prompt 能弹出原生面板
 
+        #if DEBUG
         if #available(macOS 13.3, *) {
             webView.isInspectable = true
         }
+        #endif
 
         loadChatPage(into: webView)
         return webView
@@ -85,34 +96,10 @@ struct ChatWebView: NSViewRepresentable {
     }
 
     /// 按多路径查找 Web/chat/index.html：
-    /// 1) 开发阶段：仓库根 Web/chat/index.html
-    /// 2) 打包成 .app 后：Resources/Web/chat/index.html
+    /// 1) 打包成 .app 后：Resources/Web/chat/index.html
+    /// 2) 开发阶段：仓库根 Web/chat/index.html
     private func locateIndexHTML() -> URL? {
-        var candidates: [URL] = []
-        if let dev = sourceTreeRoot() {
-            candidates.append(dev.appendingPathComponent("Web/chat/index.html"))
-        }
-        if let bundled = Bundle.main.url(
-            forResource: "index",
-            withExtension: "html",
-            subdirectory: "Web/chat"
-        ) {
-            candidates.append(bundled)
-        }
-        for url in candidates where FileManager.default.fileExists(atPath: url.path) {
-            return url
-        }
-        return nil
-    }
-
-    /// 推出仓库根目录：编译单元 → Sources/steelg8/Chat/ 回退四层
-    private func sourceTreeRoot() -> URL? {
-        var url = URL(fileURLWithPath: #filePath)
-        url.deleteLastPathComponent() // Chat/
-        url.deleteLastPathComponent() // steelg8/
-        url.deleteLastPathComponent() // Sources/
-        url.deleteLastPathComponent() // repo root
-        return url
+        KernelConfig.webIndexURL
     }
 
     /// JS→Swift 消息派发（+ UIDelegate 让 alert/confirm/prompt 能弹出来）
@@ -188,18 +175,20 @@ struct ChatWebView: NSViewRepresentable {
                 }
             case "closeProject":
                 Task {
-                    var req = URLRequest(url: URL(string: "http://127.0.0.1:8765/project/close")!)
+                    var req = URLRequest(url: KernelConfig.url(path: "project/close"))
                     req.httpMethod = "POST"
                     req.httpBody = "{}".data(using: .utf8)
                     req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+                    KernelConfig.authorize(&req)
                     _ = try? await URLSession.shared.data(for: req)
                 }
             case "reindexProject":
                 Task {
-                    var req = URLRequest(url: URL(string: "http://127.0.0.1:8765/project/reindex")!)
+                    var req = URLRequest(url: KernelConfig.url(path: "project/reindex"))
                     req.httpMethod = "POST"
                     req.httpBody = "{}".data(using: .utf8)
                     req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+                    KernelConfig.authorize(&req)
                     _ = try? await URLSession.shared.data(for: req)
                 }
             case "openFile":

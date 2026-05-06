@@ -4,14 +4,14 @@
 >
 > A personal macOS-native AI agent for copywriters — menu-bar resident, multi-provider, local-first.
 
-steelg8 是一个跑在自己 Mac 上的个人 AI 助手。它常驻菜单栏，用一个全局快捷键唤出，底层通过一个可插拔的多模型网关（Kimi / DeepSeek / Qwen / OpenRouter …）工作，不依赖任何一家厂商。
+steelg8 是一个跑在自己 Mac 上的个人 AI 助手。它常驻菜单栏，用全局快捷键唤出，底层通过一个可插拔的多模型网关（Kimi / DeepSeek / Qwen / OpenRouter …）工作，不依赖任何一家厂商。
 
-当前仓库正处于 **Phase 0（脚手架打通）** 阶段：SwiftUI 外壳 + Python 子进程 + HTTP IPC + 多模型 Provider 注册表已经跑通，可以在本地完成一次「按快捷键 → 走模型网关 → 菜单栏显示回复」的最小闭环。
+当前仓库以 [`docs/blueprint.md`](../docs/blueprint.md) 为唯一现行真相。当前主线是 **Phase 12：管理界面 + 主聊天 SwiftUI 原生化**；Phase 9 性能增强和 Phase 10 业务扩展已让位到 Phase 12 默认翻转之后。历史完整记录见 [`docs/reference/architecture-hardening-plan.md`](../docs/reference/architecture-hardening-plan.md)。
 
 ## 设计理念
 
 - **多模型独立**：避免被任何单一厂商锁死；切换 Provider 只是改一行 JSON。
-- **成本敏感**：MVP 阶段云端 Embedding + 云端 LLM，本地模型/Rerank/向量库等重依赖统一延后到 Phase 6 双机下沉后再启用。
+- **成本敏感**：优先用可控的云端 cheap API 和本地配置；本地 runtime、Rerank、向量库加速等重能力按 blueprint 排期逐步下沉。
 - **一切本地可改**：soul.md / user.md / project.md / providers.json 都是纯文本/JSON，用户随时可以编辑。
 - **macOS-native 原生外壳**：Swift + SwiftUI，常驻菜单栏，不占 Dock，全局热键一键唤起。
 
@@ -24,7 +24,7 @@ steelg8 是一个跑在自己 Mac 上的个人 AI 助手。它常驻菜单栏，
 │   · 全局热键 (Carbon API)                               │
 │   · WKWebView 预留给 Chat / Canvas / Scratch             │
 └────────────────────────┬─────────────────────────────────┘
-                         │  HTTP (localhost:8765)
+                         │  HTTP (localhost:${STEELG8_PORT:-8765})
 ┌────────────────────────▼─────────────────────────────────┐
 │  Python Kernel (stdlib-only, fork of Hermes Agent)       │
 │   · /health · /providers · /chat                         │
@@ -32,16 +32,16 @@ steelg8 是一个跑在自己 Mac 上的个人 AI 助手。它常驻菜单栏，
 └──────────────────────────────────────────────────────────┘
 ```
 
-更详细的设计可以翻上层目录里的 `steelg8-产品设计方案-v0.1.md`（仓库暂不公开，后续可能裁剪后发布）。
+更详细的早期产品设计可以翻上层目录里的 [`docs/reference/`](../docs/reference/)；这些资料只作背景参考，当前工程状态以 [`docs/blueprint.md`](../docs/blueprint.md) 为准。
 
-## 当前功能（v0.2：Phase 2 基本完成）
+## 当前功能
 
 **基础设施**
 
 - [x] Swift 菜单栏壳 + 全局热键（⌘⇧D 截图 OCR / ⌘⇧N 便签召唤）
 - [x] Python 子进程自动拉起 + 回收，venv 随 .app 分发
 - [x] 多 Provider 注册表（10 家国内外预设：百炼 / DeepSeek / Kimi / 智谱 / 豆包 / 阶跃 / 零一 / MiniMax / 硅基流动 / OpenRouter / Tavily）
-- [x] 四层路由漏斗 + 模型能力画像 + SSE 流式
+- [x] 显式 / 默认 / 兜底 / mock 模型路由 + 模型能力画像 + SSE 流式
 
 **交互**
 
@@ -74,18 +74,21 @@ steelg8 是一个跑在自己 Mac 上的个人 AI 助手。它常驻菜单栏，
 - [x] 路径沙箱（只允许 $HOME 下）+ 结果 chip UI（运行中 → 成功 / 失败）
 - [x] 文件操作类 tool 自动附 "📂 打开 / 🔍 Finder" 按钮
 
-**对比路线图**
+**架构与诊断**
 
-| Phase | 状态 |
-|---|---|
-| Phase 0 地基 | ✅ |
-| Phase 1 对话 + Canvas + 便签 + 路由 | ✅ |
-| Phase 2 项目 + RAG + Office + 记忆 + Web | ✅（xlsx/pptx 模板填充未做） |
-| Phase 3 Web 三件套（search + fetch 已做；crawl 未做）| 🔶 |
-| Phase 4 Hotkey 全家桶 | 20% |
-| Phase 5 飞书 Bot | 0% |
-| Phase 6 双机 + 本地模型 | 0% |
-| Phase 7 打包发布 | 10% |
+- [x] 本地 capability token（per-launch 随机生成，Swift / Web / Python 端到端）
+- [x] HTTP kernel 拆 service 层：`server.py` 只做 adapter，业务逻辑在 `services/*_service.py`
+- [x] route table 取代手写 if/else 路由
+- [x] 系统面板（体检 / 索引 / RAG / 日志四页）
+- [x] 增量索引 + `file_manifest`：不变的文件不再重新解析/embed
+- [x] hybrid RAG 召回：vector / keyword / title / knowledge 四路 + rerank + citation
+- [x] 模板化切块（report / policy / meeting / table-heavy）+ heading/table-aware chunker
+
+**外壳与启动**
+
+- [x] `LSUIElement=true` 菜单栏壳，混合 accessory↔regular 切换确保 frontmost
+- [x] per-launch 动态端口，避免 8765 冲突和旧内核误连
+- [x] healthcheck 30s 退避等待，Python 进程异常退出时给出明确状态码
 
 ## 快速开始
 
@@ -130,9 +133,9 @@ cp config/providers.example.json ~/.steelg8/providers.json
 cd Python
 python3 server.py
 # 在另一个终端：
-curl http://127.0.0.1:8765/health
-curl http://127.0.0.1:8765/providers
-curl -X POST http://127.0.0.1:8765/chat \
+curl "http://127.0.0.1:${STEELG8_PORT:-8765}/health"
+curl "http://127.0.0.1:${STEELG8_PORT:-8765}/providers"
+curl -X POST "http://127.0.0.1:${STEELG8_PORT:-8765}/chat" \
      -H "Content-Type: application/json" \
      -d '{"message":"hello"}'
 ```
@@ -168,14 +171,19 @@ steelg8/
 │   ├── Settings/              Provider 配置 UI
 │   └── Shared/                工具类
 ├── Python/
-│   ├── server.py              HTTP kernel（stdlib-only）
+│   ├── server.py              HTTP adapter（stdlib-only / route table 分发）
+│   ├── kernel/                auth / request / response / routing helpers
+│   ├── services/              chat / project / conversation / diagnostics …（业务逻辑）
+│   ├── document/              parser registry / IR blocks / template chunker
+│   ├── rag_store.py           RagStore 接口 + SQLiteBruteForceStore
+│   ├── vectordb.py            SQLite schema + 增量 manifest
 │   ├── providers.py           多 Provider 注册表
-│   ├── capabilities.py        模型能力画像表
-│   ├── router.py              四层路由漏斗
-│   └── agent.py               轻量 agent loop（含流式）
+│   ├── router.py              显式 / 默认 / 兜底 / mock 路由
+│   ├── agent.py               agent loop（流式 + tool calling）
+│   └── skills/                tool 注册表 + docx skills
 ├── Web/chat/                  WKWebView 加载的前端
 │   ├── index.html
-│   ├── styles.css
+│   ├── styles/
 │   ├── markdown.js            自写极简 Markdown 渲染
 │   └── chat.js                SSE 客户端 + UI
 ├── config/
@@ -188,15 +196,14 @@ steelg8/
 
 ## Roadmap
 
-- **Phase 0** ✅ 脚手架打通
-- **Phase 0.5** ✅ 四层路由 + 模型画像 + agent loop + SSE 流式
-- **Phase 1** 🔄 WKWebView 对话窗（已做）→ Canvas 基础 → Scratch 侧栏
-- **Phase 2** 项目记忆 + 模板库 + 云端 Embedding
-- **Phase 3** Canvas / Scratch 扩展 + Web 三件套
-- **Phase 4** 全局热键与系统集成深化
-- **Phase 5** 飞书 Bot（移动端接入）
-- **Phase 6** 双机架构（Tailscale）+ 本地模型下沉（Ollama / bge-m3）
-- **Phase 7** 打包 / 发布 / 安装脚本
+完整阶段定义见 [`docs/blueprint.md`](../docs/blueprint.md)，下面只保留当前推进位置摘要。
+
+- **Phase 1–8** ✅ 本地安全边界 / service 拆层 / agent 可靠性 / RAG 管线 / Web UI 模块化 / 诊断与产品打磨
+- **Phase 9–10** 🕒 让位：性能增强与业务扩展，等 Phase 12 默认翻转后再启动
+- **Phase 11** 🔀 并入：WebView 注入面收尾已并入 Phase 12
+- **Phase 12** 🔄 当前主线：Track A 管理窗口原生化推进中；下一步见 [`docs/plan/active/`](../docs/plan/active/)
+
+历史里的"飞书 Bot"和"双机 + 本地模型"想法暂未排期；新想法统一收口到 [`docs/ideas.md`](../docs/ideas.md) 或 blueprint Backlog。
 
 ## License
 

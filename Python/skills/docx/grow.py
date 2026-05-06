@@ -30,6 +30,19 @@ class DocxGrowError(RuntimeError):
     pass
 
 
+def _resolve_default_output(src: Path) -> Path:
+    """优先走 <project>/steelg8-output/<src.stem>/v{N}.docx，否则退回原目录。"""
+    try:
+        import project as project_mod
+    except ImportError:
+        return src.with_name(src.stem + "-edited.docx")
+    active = project_mod.get_active()
+    if not active:
+        return src.with_name(src.stem + "-edited.docx")
+    path = project_mod.next_version_path(src.stem, ext=".docx")
+    return path or src.with_name(src.stem + "-edited.docx")
+
+
 @dataclass
 class GrowResult:
     output_path: str
@@ -51,7 +64,7 @@ def _open_copy(source_path: str, output_path: str | None) -> tuple["object", Pat
     if output_path:
         out = Path(output_path).expanduser().resolve()
     else:
-        out = src.with_name(src.stem + "-edited.docx")
+        out = _resolve_default_output(src)
 
     out.parent.mkdir(parents=True, exist_ok=True)
     if out != src:
@@ -134,8 +147,8 @@ def _make_paragraph_after(
     text: str,
     style: str | None = None,
     doc: "object | None" = None,
-) -> None:
-    """在 anchor 段落之后插入一个新段落。
+):
+    """在 anchor 段落之后插入一个新段落，返回新段落的 lxml element。
 
     如果传了 style 且 doc 可用：借用 python-docx 的 add_paragraph 先造再 lxml 搬家，
     这样 style 的 pStyle/@w:val 会用对 style_id（"Heading 2" → "Heading2"）。
@@ -145,7 +158,7 @@ def _make_paragraph_after(
             tmp_p = doc.add_paragraph(text or "", style=style)
             p_element = tmp_p._p
             anchor._p.addnext(p_element)
-            return
+            return p_element
         except KeyError:
             # style 名字在文档里不存在，回退到手写 XML
             pass
@@ -167,6 +180,7 @@ def _make_paragraph_after(
     r.append(t)
     new_p.append(r)
     anchor._p.addnext(new_p)
+    return new_p
 
 
 # ---- 公开 API ----
@@ -298,6 +312,121 @@ def append_table_row(
         inserted_elements=1,
         notes=[f"表格 #{table_index} 追加一行：{padded}"],
     )
+
+
+def build_outline(
+    source_path: str,
+    *,
+    sections: list[dict[str, Any]],
+    after: str | None = None,
+    anchor_level: int | None = None,
+    output_path: str | None = None,
+) -> dict[str, Any]:
+    """一次性按大纲批量插入多个章节 —— **推荐使用的批量接口**。
+
+    相比 insert_section_after_heading 的优势：
+    - 单次调用，LLM 不需要理解"锚点依赖关系"
+    - 内部串行，前一节的结尾自动成为下一节的锚点，绝不会断链
+    - 原子写回（全部插完再 save），中途失败不会留下残破文档
+
+    sections: [
+        {"level": 1, "title": "一、项目概述",     "paragraphs": ["段落 1", "段落 2"]},
+        {"level": 1, "title": "二、现状分析",     "paragraphs": ["..."]},
+        {"level": 2, "title": "2.1 痛点",        "paragraphs": ["..."]},
+        ...
+    ]
+
+    after: 第一节插在哪个已有标题之后；不填就追加到文档末尾
+    anchor_level: 如果 after 有重名，限定级别
+    output_path: 不传就走默认（项目 steelg8-output/v{N}）
+
+    返回：
+    {
+        "output_path": "/path/to/output.docx",
+        "total_inserted": int,   # 全部插入的 element 数
+        "sections": [ {"index": 0, "title": "...", "level": 1, "paragraphs_added": 2}, ... ],
+        "final_headings": [{"level":1, "text":"...", "index":N}, ...]
+    }
+    """
+    try:
+        from docx import Document  # noqa: F401（触发导入检查）
+    except ImportError as exc:
+        raise DocxGrowError("需要 python-docx；venv 里没装上") from exc
+
+    if not sections or not isinstance(sections, list):
+        raise DocxGrowError("sections 不能为空")
+
+    doc, out = _open_copy(source_path, output_path)
+
+    # 确定起始 anchor
+    if after:
+        anchor = _find_heading_by_text(doc, after, level=anchor_level)
+        if anchor is None:
+            raise DocxGrowError(f"找不到起始锚点标题：{after!r}")
+        # 用原函数的逻辑找到"章节末尾"，在那之后追加
+        current_anchor: Any = _find_section_end_anchor(doc, anchor)
+    else:
+        # 追加到文末：取最后一个 paragraph 作为 anchor
+        paragraphs = doc.paragraphs
+        if not paragraphs:
+            raise DocxGrowError("文档为空，无法追加大纲")
+        current_anchor = paragraphs[-1]
+
+    total_count = 0
+    sec_reports: list[dict[str, Any]] = []
+
+    for idx, sec in enumerate(sections):
+        if not isinstance(sec, dict):
+            sec_reports.append({"index": idx, "ok": False, "error": "section 不是 dict"})
+            continue
+
+        title = str(sec.get("title") or "").strip()
+        level = sec.get("level", 1)
+        try:
+            level = int(level)
+        except (TypeError, ValueError):
+            level = 1
+        level = max(1, min(level, 9))
+        paragraphs_text = sec.get("paragraphs") or []
+        if not isinstance(paragraphs_text, list):
+            paragraphs_text = [str(paragraphs_text)]
+
+        if not title:
+            sec_reports.append({"index": idx, "ok": False, "error": "title 为空"})
+            continue
+
+        # 正序 addnext：每次插完，新元素成为下一次的 anchor
+        # 顺序：current_anchor → title → p1 → p2 → p3 → ...
+        style = f"Heading {level}"
+        title_elem = _make_paragraph_after(current_anchor, title, style=style, doc=doc)
+        total_count += 1
+        current_anchor = _PElementWrapper(title_elem)
+
+        for text in paragraphs_text:
+            p_elem = _make_paragraph_after(current_anchor, str(text), doc=doc)
+            total_count += 1
+            current_anchor = _PElementWrapper(p_elem)
+
+        sec_reports.append({
+            "index": idx,
+            "ok": True,
+            "level": level,
+            "title": title,
+            "paragraphs_added": len(paragraphs_text),
+        })
+
+    # 整个大纲插完一次性 save
+    doc.save(str(out))
+
+    # 返回时重新列 headings 给 LLM 看最终结构
+    final_headings = list_headings(str(out))
+
+    return {
+        "output_path": str(out),
+        "total_inserted": total_count,
+        "sections": sec_reports,
+        "final_headings": final_headings,
+    }
 
 
 def list_headings(source_path: str) -> list[dict[str, Any]]:

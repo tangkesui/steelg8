@@ -1,12 +1,23 @@
+import AppKit
 import SwiftUI
 
 struct ContentView: View {
     @EnvironmentObject private var appController: AppController
+    @AppStorage("experimental.nativeChat") private var nativeChat = true
 
     var body: some View {
-        ChatWebView()
-            .frame(minWidth: 960, minHeight: 640)
-        // OCR 走菜单栏 + ⌘⇧D 热键
-        // 运行状态看菜单栏图标 + 对话顶部的 pill
+        Group {
+            if nativeChat {
+                NativeChatView()
+            } else {
+                ChatWebView()
+                    .frame(minWidth: 960, minHeight: 640)
+            }
+        }
+        .background(
+            WindowConfigurator { window in
+                appController.configureMainWindow(window)
+            }
+        )
     }
 }

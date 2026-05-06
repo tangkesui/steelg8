@@ -25,6 +25,22 @@ from pathlib import Path
 from typing import Any
 
 
+def _resolve_default_output(src: Path, task_name: str | None) -> Path:
+    """默认输出：有激活项目就走 steelg8-output/<task>/v{N}.docx，否则模板同目录。"""
+    try:
+        import project as project_mod  # noqa: E402
+    except ImportError:
+        return src.with_name(src.stem + "-filled.docx")
+    active = project_mod.get_active()
+    if not active:
+        return src.with_name(src.stem + "-filled.docx")
+    task = task_name or src.stem
+    path = project_mod.next_version_path(task, ext=".docx")
+    if path:
+        return path
+    return src.with_name(src.stem + "-filled.docx")
+
+
 PLACEHOLDER_RE = re.compile(r"\{\{\s*([a-zA-Z0-9_.\-]+)\s*\}\}")
 
 
@@ -122,10 +138,15 @@ def fill(
     template_path: str,
     data: Any,
     output_path: str | None = None,
+    *,
+    task_name: str | None = None,
 ) -> FillResult:
     """在模板副本上做 placeholder 替换；不改原文件。
 
-    output_path 不给就自动在模板同目录下生成 `*-filled.docx`。
+    输出路径优先级：
+      1. 显式传入的 `output_path`
+      2. 当前激活项目有 —— 走 <project>/steelg8-output/<task_name>/v{N}.docx
+      3. 无激活项目 —— 退回到模板同目录 `*-filled.docx`（旧行为）
     """
     try:
         from docx import Document
@@ -139,7 +160,7 @@ def fill(
     if output_path:
         out = Path(output_path).expanduser().resolve()
     else:
-        out = src.with_name(src.stem + "-filled.docx")
+        out = _resolve_default_output(src, task_name)
 
     out.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(src, out)

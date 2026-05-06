@@ -11,12 +11,10 @@ Web 搜索 + 网页内容抓取
 
 from __future__ import annotations
 
-import json
 from typing import Any
-from urllib import request, error
-from urllib.parse import quote
 
 from providers import ProviderRegistry
+import network
 
 
 # ---- Tavily Search ----
@@ -58,20 +56,18 @@ def search(
         "include_raw_content": False,
     }
 
-    req = request.Request(
-        "https://api.tavily.com/search",
-        data=json.dumps(payload).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
     try:
-        with request.urlopen(req, timeout=timeout) as resp:
-            body = json.loads(resp.read().decode("utf-8"))
-    except error.HTTPError as exc:
-        detail = exc.read().decode("utf-8", errors="replace")[:400] if exc.fp else ""
-        raise WebError(f"HTTP {exc.code}: {detail}") from exc
-    except error.URLError as exc:
-        raise WebError(f"网络错误：{exc}") from exc
+        body = network.request_json(
+            "https://api.tavily.com/search",
+            method="POST",
+            payload=payload,
+            timeout=timeout,
+            retries=1,
+        )
+    except network.NetworkError as exc:
+        raise WebError(str(exc)) from exc
+    if not isinstance(body, dict):
+        raise WebError("Tavily 响应不是 JSON 对象")
 
     results = body.get("results") or []
     out = []
@@ -95,24 +91,22 @@ def fetch(url: str, *, timeout: int = 25) -> dict[str, Any]:
         raise WebError("url 必须 http(s):// 开头")
 
     jina_url = "https://r.jina.ai/" + url  # Jina 自己做 URL encoding
-    req = request.Request(
-        jina_url,
-        headers={
-            "User-Agent": "steelg8/0.2 (+file://local)",
-            "Accept": "text/markdown, text/plain",
-            # Jina Reader 在响应里塞结构化信号
-            "X-Return-Format": "markdown",
-            "X-With-Links-Summary": "true",
-        },
-    )
     try:
-        with request.urlopen(req, timeout=timeout) as resp:
-            body = resp.read().decode("utf-8", errors="replace")
-            ctype = resp.headers.get("Content-Type", "")
-    except error.HTTPError as exc:
-        raise WebError(f"Jina HTTP {exc.code}") from exc
-    except error.URLError as exc:
-        raise WebError(f"网络错误：{exc}") from exc
+        body, headers = network.request_text(
+            jina_url,
+            headers={
+                "User-Agent": "steelg8/0.2 (+file://local)",
+                "Accept": "text/markdown, text/plain",
+                # Jina Reader 在响应里塞结构化信号
+                "X-Return-Format": "markdown",
+                "X-With-Links-Summary": "true",
+            },
+            timeout=timeout,
+            retries=1,
+        )
+        ctype = headers.get("Content-Type", "")
+    except network.NetworkError as exc:
+        raise WebError(str(exc)) from exc
 
     # Jina 返回的 markdown 可能有 "Title: ..." 开头元信息
     title = ""

@@ -99,12 +99,15 @@ PRICING: dict[str, Price] = {
     "qwen-long":      Price(0.069, 0.11),   # 长上下文特价
 }
 
-# provider 级兜底档（model 未命中时用）
+# provider 级兜底档（model 未命中时用）。
+# `bailian` 是 providers.example.json 里的 provider id（阿里百炼 OpenAI 兼容模式），
+# 与 `qwen` 共用同一档定价。两个 key 都保留是为了向后兼容历史调用。
 PROVIDER_DEFAULT: dict[str, Price] = {
     "openrouter": Price(1.00, 3.00),   # 偏保守中档估价
     "kimi":       Price(1.67, 1.67),
     "deepseek":   Price(0.27, 1.10),
     "qwen":       Price(0.11, 0.33),
+    "bailian":    Price(0.11, 0.33),
 }
 
 

@@ -9,6 +9,7 @@ steelg8 轻量 agent loop
 流式协议（SSE event dict）：
   {"type": "meta",  "decision": {...}}
   {"type": "delta", "content": "部分文本"}
+  {"type": "_transcript", "message": {...}}  # 内部事件：server 用来落库，不转前端
   {"type": "usage", "usage": {prompt_tokens, completion_tokens, total_tokens}, "cost_usd": ...}
   {"type": "done",  "full": "完整文本", "source": "provider:kimi"}
   {"type": "error", "error": "..."}
@@ -17,16 +18,21 @@ steelg8 轻量 agent loop
 from __future__ import annotations
 
 import json
+import time as _time
 from dataclasses import dataclass, field
 from typing import Any, Iterator
-from urllib import request, error
+from urllib import request
 
 from providers import Provider
 from router import RoutingDecision
 import pricing
+import cache_markers
+import logger
+import network
 
 
-# 某些"thinking"类模型只接受固定 temperature。清单按 model id 前缀匹配。
+# 某些"thinking"类模型只接受固定 temperature，并且 API 会检查
+# 历史里的 assistant(带 tool_calls) 消息必须带 reasoning_content 字段。
 _FIXED_TEMPERATURE_MODELS: tuple[tuple[str, float], ...] = (
     ("kimi-k2.5", 1.0),
     ("kimi-k2-thinking", 1.0),
@@ -42,6 +48,16 @@ def _effective_temperature(model: str, requested: float) -> float:
         if model and (model == prefix or model.startswith(prefix)):
             return fixed
     return requested
+
+
+def _is_thinking_model(model: str) -> bool:
+    """判断模型是否走 thinking 协议（输出 reasoning_content，要求回传）。"""
+    if not model:
+        return False
+    for prefix, _ in _FIXED_TEMPERATURE_MODELS:
+        if model == prefix or model.startswith(prefix):
+            return True
+    return False
 
 
 @dataclass
@@ -61,14 +77,40 @@ class ChatMessage:
 class AgentContext:
     system_prompt: str = ""
     history: list[ChatMessage] = field(default_factory=list)
+    # 允许直接喂 OpenAI-format 的 dict 历史（来自 DB），绕过 ChatMessage dataclass
+    history_dicts: list[dict[str, Any]] | None = None
     tools: list[dict[str, Any]] = field(default_factory=list)
+    conversation_id: int | None = None
 
-    def build_messages(self, user_message: str) -> list[dict[str, Any]]:
+    def build_messages(
+        self,
+        user_message: str,
+        *,
+        provider_name: str = "",
+        model: str = "",
+    ) -> list[dict[str, Any]]:
         msgs: list[dict[str, Any]] = []
         if self.system_prompt.strip():
-            msgs.append({"role": "system", "content": self.system_prompt.strip()})
-        for m in self.history:
-            msgs.append(m.to_openai())
+            sys_content = cache_markers.build_system_payload(
+                self.system_prompt.strip(),
+                provider_name=provider_name,
+                model=model,
+            )
+            msgs.append({"role": "system", "content": sys_content})
+        if self.history_dicts:
+            for raw in self.history_dicts:
+                msg = _clone_message(raw)
+                if (
+                    _is_thinking_model(model)
+                    and msg.get("role") == "assistant"
+                    and msg.get("tool_calls")
+                    and "reasoning_content" not in msg
+                ):
+                    msg["reasoning_content"] = ""
+                msgs.append(msg)
+        else:
+            for m in self.history:
+                msgs.append(m.to_openai())
         msgs.append({"role": "user", "content": user_message})
         return msgs
 
@@ -82,6 +124,7 @@ class AgentResult:
     usage: dict[str, int] | None = None  # {prompt_tokens, completion_tokens, total_tokens}
     cost_usd: float = 0.0
     tool_calls: list[dict[str, Any]] = field(default_factory=list)  # 历次 tool call + result
+    transcript_messages: list[dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -96,6 +139,11 @@ class AgentResult:
             "costUsd": round(self.cost_usd, 8),
             "toolCalls": list(self.tool_calls),
         }
+
+
+def _clone_message(message: dict[str, Any]) -> dict[str, Any]:
+    """Return a JSON-safe copy before the loop mutates/reuses message objects."""
+    return json.loads(json.dumps(message, ensure_ascii=False))
 
 
 # ---------- 非流式 ----------
@@ -122,13 +170,23 @@ def run_once(
             source="mock-fallback",
         )
 
-    messages = context.build_messages(user_message)
+    messages = context.build_messages(
+        user_message,
+        provider_name=provider.name,
+        model=decision.model or "",
+    )
     accumulated_tool_calls: list[dict[str, Any]] = []
+    transcript_messages: list[dict[str, Any]] = []
     total_prompt = total_completion = 0
     total_cost = 0.0
     resolved_model = decision.model or (provider.models[0] if provider.models else "")
     final_content = ""
     last_error: str | None = None
+    extra_headers = cache_markers.extra_headers(
+        provider.name,
+        conversation_id=context.conversation_id,
+        model=decision.model or "",
+    )
 
     for _ in range(MAX_TOOL_ITER):
         model_id = decision.model or (provider.models[0] if provider.models else "")
@@ -148,6 +206,7 @@ def run_once(
                 payload,
                 api_key=provider.api_key(),
                 timeout=timeout,
+                extra_headers=extra_headers,
             )
         except Exception as exc:  # noqa: BLE001
             last_error = str(exc)
@@ -168,12 +227,19 @@ def run_once(
 
         tcs = msg.get("tool_calls") or []
         if tcs and tool_dispatch:
-            # 追加 assistant turn（带 tool_calls）
-            messages.append({
+            # 追加 assistant turn（带 tool_calls）。thinking 模型要求带上 reasoning_content
+            assistant_msg: dict[str, Any] = {
                 "role": "assistant",
                 "content": msg.get("content") or "",
                 "tool_calls": tcs,
-            })
+            }
+            rc = msg.get("reasoning_content")
+            if rc:
+                assistant_msg["reasoning_content"] = rc
+            elif _is_thinking_model(decision.model or ""):
+                assistant_msg["reasoning_content"] = ""
+            messages.append(assistant_msg)
+            transcript_messages.append(_clone_message(assistant_msg))
             for tc in tcs:
                 fname = (tc.get("function") or {}).get("name", "")
                 raw_args = (tc.get("function") or {}).get("arguments", "{}")
@@ -188,11 +254,13 @@ def run_once(
                     "args": args,
                     "result": result,
                 })
-                messages.append({
+                tool_msg = {
                     "role": "tool",
                     "tool_call_id": tc.get("id"),
                     "content": json.dumps(result, ensure_ascii=False),
-                })
+                }
+                messages.append(tool_msg)
+                transcript_messages.append(_clone_message(tool_msg))
             # 继续 loop，让 LLM 看到 tool result 生成最终答案
             continue
 
@@ -218,6 +286,7 @@ def run_once(
                "total_tokens": total_prompt + total_completion} if (total_prompt or total_completion) else None,
         cost_usd=total_cost,
         tool_calls=accumulated_tool_calls,
+        transcript_messages=transcript_messages,
         error=last_error,
     )
 
@@ -250,14 +319,25 @@ def run_stream(
         yield {"type": "done", "full": full, "source": "mock-fallback"}
         return
 
-    messages = context.build_messages(user_message)
+    messages = context.build_messages(
+        user_message,
+        provider_name=provider.name,
+        model=decision.model or "",
+    )
+    extra_headers = cache_markers.extra_headers(
+        provider.name,
+        conversation_id=context.conversation_id,
+        model=decision.model or "",
+    )
     buffered: list[str] = []                    # 跨所有 iter 的 assistant 文本
     iter_buffered: list[str]
     total_prompt = total_completion = 0
     total_cost = 0.0
     resolved_model: str | None = None
 
+    iter_idx = 0
     for _ in range(MAX_TOOL_ITER):
+        iter_idx += 1
         model_id = decision.model or (provider.models[0] if provider.models else "")
         payload: dict[str, Any] = {
             "model": model_id,
@@ -270,8 +350,19 @@ def run_stream(
             payload["tools"] = tools
             payload["tool_choice"] = "auto"
 
+        iter_started = _time.time()
+        logger.info("agent.iter.start",
+                    conversation_id=context.conversation_id,
+                    iter=iter_idx,
+                    provider=provider.name,
+                    model=model_id,
+                    messages_count=len(messages),
+                    has_tools=bool(tools),
+                    extra_headers=list(extra_headers.keys()) if extra_headers else [])
+
         # 本轮 assistant 文本 / tool_calls 的聚合
         iter_buffered = []
+        iter_reasoning: list[str] = []   # thinking 模型的推理过程增量
         tc_accum: dict[int, dict[str, Any]] = {}   # index → {id, type, function.name, function.arguments}
         iter_usage: dict[str, int] | None = None
         iter_model: str | None = None
@@ -282,6 +373,7 @@ def run_stream(
                 payload,
                 api_key=provider.api_key(),
                 timeout=timeout,
+                extra_headers=extra_headers,
             ):
                 if chunk.get("model") and not iter_model:
                     iter_model = chunk["model"]
@@ -291,16 +383,39 @@ def run_stream(
                     iter_buffered.append(text)
                     buffered.append(text)
                     yield {"type": "delta", "content": text}
+                if chunk.get("reasoning_delta"):
+                    iter_reasoning.append(chunk["reasoning_delta"])
                 if chunk.get("tool_calls_delta"):
                     _merge_tool_calls_delta(tc_accum, chunk["tool_calls_delta"])
                 if chunk.get("usage"):
                     iter_usage = _extract_usage(chunk["usage"])
         except Exception as exc:  # noqa: BLE001
+            logger.error("agent.iter.exception",
+                         exc=exc,
+                         conversation_id=context.conversation_id,
+                         iter=iter_idx,
+                         provider=provider.name,
+                         model=model_id,
+                         duration_ms=int((_time.time() - iter_started) * 1000))
             yield {"type": "error", "error": str(exc)}
             tail = _mock_content(user_message, decision, error=str(exc))
             yield {"type": "delta", "content": f"\n\n[stream 失败，降级 mock] {tail}"}
             yield {"type": "done", "full": "".join(buffered) + f"\n\n{tail}", "source": "mock-fallback"}
             return
+
+        logger.info("agent.iter.end",
+                    conversation_id=context.conversation_id,
+                    iter=iter_idx,
+                    model=iter_model or model_id,
+                    duration_ms=int((_time.time() - iter_started) * 1000),
+                    prompt_tokens=(iter_usage or {}).get("prompt_tokens", 0),
+                    completion_tokens=(iter_usage or {}).get("completion_tokens", 0),
+                    content_len=sum(len(s) for s in iter_buffered),
+                    tool_calls_count=len(tc_accum),
+                    tool_names=[
+                        (tc_accum[i].get("function", {}) or {}).get("name", "")
+                        for i in sorted(tc_accum.keys())
+                    ])
 
         # usage 统计
         if iter_usage:
@@ -322,11 +437,24 @@ def run_stream(
                 tc.setdefault("id", tc.get("id") or f"call_{id(tc)}")
                 tc.setdefault("function", {"name": "", "arguments": ""})
                 tc["function"].setdefault("arguments", "")
-            messages.append({
+            assistant_msg: dict[str, Any] = {
                 "role": "assistant",
                 "content": "".join(iter_buffered),
                 "tool_calls": tool_calls_list,
-            })
+            }
+            # thinking 模型（Kimi K2.5 / DeepSeek R1 等）要求回发时带上 reasoning_content
+            if iter_reasoning:
+                assistant_msg["reasoning_content"] = "".join(iter_reasoning)
+            elif _is_thinking_model(decision.model or ""):
+                # 即便本轮没流出 reasoning，也给个空串兜底（Kimi 校验字段存在性）
+                assistant_msg["reasoning_content"] = ""
+            messages.append(assistant_msg)
+            yield {"type": "_transcript", "message": _clone_message(assistant_msg)}
+
+            # 一轮内多个互相依赖的 docx 插入类工具：前一个失败就短路后续
+            # （避免 AI 并发丢 9 个 insert_section、锚点全部断链的情况）
+            _docx_chain = {"docx_insert_section", "docx_append_paragraphs"}
+            _chain_broken = False
 
             for tc in tool_calls_list:
                 fname = tc["function"].get("name") or ""
@@ -336,13 +464,42 @@ def run_stream(
                 except json.JSONDecodeError:
                     args = {}
                 yield {"type": "tool_start", "id": tc.get("id"), "name": fname, "args": args}
-                result = tool_dispatch(fname, args)
+
+                # 短路：链条已断就不再执行，直接告诉 LLM 这组 call 被拒
+                if _chain_broken and fname in _docx_chain:
+                    result = {
+                        "error": "chain_skipped",
+                        "hint": ("同轮前序的 docx 插入已经失败，锚点链断裂。"
+                                 "请先根据上一条 tool 返回的 available_headings 调整策略，"
+                                 "**一次只插一个章节**，收到成功回执再发下一条。"),
+                    }
+                else:
+                    t0 = _time.time()
+                    result = tool_dispatch(fname, args)
+                    logger.info("tool.call",
+                                conversation_id=context.conversation_id,
+                                iter=iter_idx,
+                                tool=fname,
+                                duration_ms=int((_time.time() - t0) * 1000),
+                                success=not bool(isinstance(result, dict) and result.get("error")))
+                    # docx 链首次失败 → 后续同类 call 短路
+                    if (fname in _docx_chain
+                            and isinstance(result, dict)
+                            and result.get("error")):
+                        _chain_broken = True
+                        logger.warn("tool.chain_broken",
+                                    conversation_id=context.conversation_id,
+                                    iter=iter_idx,
+                                    at_tool=fname,
+                                    error=str(result.get("error"))[:120])
                 yield {"type": "tool_result", "id": tc.get("id"), "name": fname, "result": result}
-                messages.append({
+                tool_msg = {
                     "role": "tool",
                     "tool_call_id": tc.get("id"),
                     "content": json.dumps(result, ensure_ascii=False),
-                })
+                }
+                messages.append(tool_msg)
+                yield {"type": "_transcript", "message": _clone_message(tool_msg)}
             # 继续下一轮让 LLM 基于 tool result 继续输出
             continue
 
@@ -393,18 +550,40 @@ def _extract_usage(raw: Any) -> dict[str, int] | None:
     return {"prompt_tokens": prompt, "completion_tokens": completion, "total_tokens": total}
 
 
-def _post_json(url: str, payload: dict[str, Any], *, api_key: str, timeout: int) -> dict[str, Any]:
-    req = request.Request(
-        url,
-        data=json.dumps(payload).encode("utf-8"),
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        },
-        method="POST",
-    )
-    with request.urlopen(req, timeout=timeout) as resp:
-        return json.loads(resp.read().decode("utf-8"))
+def _post_json(
+    url: str,
+    payload: dict[str, Any],
+    *,
+    api_key: str,
+    timeout: int,
+    extra_headers: dict[str, str] | None = None,
+    retries: int = 2,
+) -> dict[str, Any]:
+    """POST chat completions（非流式）。
+
+    瞬时错误（429/500/502/503/504/超时）内建重试 2 次；
+    4xx 客户端错误（如 400/401/403）直接抛出不重试。
+    """
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    if extra_headers:
+        headers.update(extra_headers)
+    try:
+        body = network.request_json(
+            url,
+            method="POST",
+            payload=payload,
+            headers=headers,
+            timeout=timeout,
+            retries=retries,
+        )
+    except network.NetworkError as exc:
+        raise RuntimeError(str(exc)) from exc
+    if not isinstance(body, dict):
+        raise RuntimeError("上游返回 JSON 不是对象")
+    return body
 
 
 def _post_sse(
@@ -413,29 +592,35 @@ def _post_sse(
     *,
     api_key: str,
     timeout: int,
+    extra_headers: dict[str, str] | None = None,
+    retries: int = 2,
 ) -> Iterator[dict[str, Any]]:
     """拉上游 SSE，yield 结构化事件：
       {"delta": "...", "usage": None, "model": None}
       {"delta": None, "usage": {...}, "model": "xxx"}
 
-    合并了 chunk 级 content 与最终 usage chunk，让调用方不必懂 SSE 细节。
+    连接建立前失败（含 429/5xx/超时）会自动重试，最多 `retries` 次；
+    一旦连上开始读流，就不再重试（避免双写）。
     """
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+        "Accept": "text/event-stream",
+    }
+    if extra_headers:
+        headers.update(extra_headers)
     req = request.Request(
         url,
         data=json.dumps(payload).encode("utf-8"),
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-            "Accept": "text/event-stream",
-        },
+        headers=headers,
         method="POST",
     )
 
+    # 连接建立之前的 retry：open_request 内部会按状态码判定是否 retryable
     try:
-        resp = request.urlopen(req, timeout=timeout)
-    except error.HTTPError as exc:
-        detail = exc.read().decode("utf-8", errors="replace")[:500] if exc.fp else ""
-        raise RuntimeError(f"HTTP {exc.code}: {detail}") from exc
+        resp = network.open_request(req, timeout=timeout, retries=retries)
+    except network.NetworkError as exc:
+        raise RuntimeError(str(exc)) from exc
 
     try:
         while True:
@@ -464,6 +649,12 @@ def _post_sse(
                 content = delta.get("content")
                 if content:
                     out["delta"] = content
+                # Kimi K2.5 / DeepSeek R1 等 thinking 模型会在 delta 里输出
+                # reasoning_content 增量。thinking 模型要求后续轮次把这个字段
+                # 回传给它（否则会抛 "reasoning_content is missing"）。
+                reasoning = delta.get("reasoning_content")
+                if reasoning:
+                    out["reasoning_delta"] = reasoning
                 tc_delta = delta.get("tool_calls")
                 if tc_delta:
                     out["tool_calls_delta"] = tc_delta
@@ -481,14 +672,39 @@ def _fake_stream_chunks(text: str, size: int = 24) -> Iterator[str]:
 
 
 def _mock_content(user_message: str, decision: RoutingDecision, *, error: str | None = None) -> str:
-    lines = [
-        "steelg8 本地内核收到消息。",
-        f"原始输入：{user_message[:120]}{'…' if len(user_message) > 120 else ''}",
-        f"路由：layer={decision.layer} · reason={decision.reason}",
-    ]
+    # 上游失败 → 友好化错误提示，引导用户换模型或稍后重试
     if error:
-        lines.append(f"上游调用失败：{error}")
-    lines.append(
-        "把 ~/.steelg8/providers.json 配齐任意一家 provider，就会切到真模型。"
-    )
+        lines = [f"⚠️ **{decision.provider or '未知'}** / `{decision.model or '-'}` 调用失败"]
+        err_lower = (error or "").lower()
+        if "429" in error or "overload" in err_lower or "rate" in err_lower:
+            lines.append("")
+            lines.append("**原因**：上游瞬时过载或限流（内部已自动重试 2 次）。")
+            lines.append("**建议**：")
+            lines.append("- 等 10-30 秒再发，过载通常秒级恢复")
+            lines.append("- 或从右上角「模型」下拉换另一家（Qwen/DeepSeek/Claude 都能接）")
+        elif "401" in error or "403" in error or "认证" in error or "api key" in err_lower:
+            lines.append("")
+            lines.append("**原因**：API Key 无效或无权限。")
+            lines.append("**建议**：打开 设置 → 重新填 key，或点 ↻ 刷 provider 列表")
+        elif "404" in error:
+            lines.append("")
+            lines.append("**原因**：模型不存在或 base_url 错了。")
+            lines.append("**建议**：点「⟲ 同步模型」拉一次最新列表再选")
+        elif "timeout" in err_lower or "超时" in error:
+            lines.append("")
+            lines.append("**原因**：网络超时。")
+            lines.append("**建议**：稍后重试，或检查网络 / VPN")
+        else:
+            lines.append("")
+            lines.append(f"**详细**：{error}")
+        return "\n".join(lines)
+
+    # 没错误 → 完全没配 provider 的兜底话术
+    lines = [
+        "⚠️ **未配置任何 provider**",
+        "",
+        f"路由：{decision.layer} · {decision.reason}",
+        "",
+        "请在右上角 ↻ 刷新，或打开 设置 配一个 provider。",
+    ]
     return "\n".join(lines)

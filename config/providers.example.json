@@ -1,45 +1,36 @@
 {
-  "$schema_note": "这是 steelg8 多 provider 配置样板。用法：复制到 ~/.steelg8/providers.json，填好对应的 API Key 环境变量。base_url 已按 OpenAI 兼容接口填好，无需动。",
+  "$schema_note": "新 schema (v2)：providers.json 只放元数据；API key → secrets.json，model 列表 → model_catalog.json。复制到 ~/.steelg8/providers.json，按需删 / 加 provider。base_url 已按 OpenAI 兼容接口填好。",
+  "version": 2,
+  "default_provider": "deepseek",
   "default_model": "deepseek-chat",
-  "providers": {
-    "kimi": {
+  "providers": [
+    {
+      "id": "kimi",
+      "name": "Kimi",
       "base_url": "https://api.moonshot.cn/v1",
       "api_key_env": "KIMI_API_KEY",
-      "models": [
-        "moonshot-v1-8k",
-        "moonshot-v1-32k",
-        "moonshot-v1-128k",
-        "kimi-k2-0905-preview"
-      ]
+      "kind": "openai-compatible"
     },
-    "deepseek": {
+    {
+      "id": "deepseek",
+      "name": "DeepSeek",
       "base_url": "https://api.deepseek.com",
       "api_key_env": "DEEPSEEK_API_KEY",
-      "models": [
-        "deepseek-chat",
-        "deepseek-reasoner"
-      ]
+      "kind": "openai-compatible"
     },
-    "bailian": {
+    {
+      "id": "bailian",
+      "name": "百炼",
       "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
       "api_key_env": "BAILIAN_API_KEY",
-      "models": [
-        "qwen-plus",
-        "qwen-max",
-        "qwen-turbo",
-        "qwen-long",
-        "text-embedding-v3"
-      ]
+      "kind": "openai-compatible"
     },
-    "openrouter": {
+    {
+      "id": "openrouter",
+      "name": "OpenRouter",
       "base_url": "https://openrouter.ai/api/v1",
       "api_key_env": "OPENROUTER_API_KEY",
-      "models": [
-        "google/gemini-2.5-pro",
-        "openai/gpt-4o",
-        "x-ai/grok-2-1212",
-        "anthropic/claude-sonnet-4"
-      ]
+      "kind": "openai-compatible"
     }
-  }
+  ]
 }

@@ -4,7 +4,12 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
 <title>steelg8 · Chat</title>
-<link rel="stylesheet" href="styles.css" />
+<link rel="stylesheet" href="styles/tokens.css" />
+<link rel="stylesheet" href="styles/layout.css" />
+<link rel="stylesheet" href="styles/chips.css" />
+<link rel="stylesheet" href="styles/canvas.css" />
+<link rel="stylesheet" href="styles/topbar.css" />
+<link rel="stylesheet" href="styles/chat.css" />
 </head>
 <body>
 <div id="app">
@@ -15,14 +20,6 @@
       <span class="slogan">方案不求人</span>
     </div>
     <div class="controls">
-      <div id="wallet-pill" class="wallet-pill" title="各家 provider 的钱包余额">
-        <span class="wallet-icon">💰</span>
-        <span id="wallet-main" class="wallet-main">—</span>
-      </div>
-      <div id="usage-pill" class="usage-pill" title="本次会话 / 今日 累计">
-        <span class="usage-main">$0.0000</span>
-        <span class="usage-sub">· 0 tok</span>
-      </div>
       <label class="model-label">
         <span>模型</span>
         <select id="model-picker">
@@ -30,37 +27,66 @@
         </select>
       </label>
       <button id="reload-providers" title="刷新 provider 列表">↻</button>
+      <button id="sync-models" title="从各 provider 拉最新模型列表">⟲ 同步模型</button>
       <div id="health-dot" class="dot dot-off" title="内核状态"></div>
     </div>
   </header>
 
   <div class="body">
     <aside id="scratch" class="scratch" data-mode="sidebar">
-      <section id="sidebar-project" class="sidebar-project">
+      <section id="sidebar-project" class="sidebar-project sidebar-card">
         <div class="sp-head">
           <span class="sp-title">📁 项目</span>
-          <button id="project-open-btn" class="sp-btn" title="选文件夹当项目">打开…</button>
+          <button id="project-open-btn" class="sp-btn" title="打开一个文件夹当新项目">+ 打开</button>
         </div>
-        <div id="sp-body" class="sp-body sp-empty">
-          <div class="sp-hint">还没选项目。点「打开…」选一个文件夹，steelg8 会索引里面的 .md / .txt 供对话引用。</div>
-        </div>
+        <div id="projects-list" class="projects-list"></div>
       </section>
 
-      <div class="sp-divider"></div>
+      <div id="project-stack-resizer"
+           class="stack-resizer stack-resizer-project"
+           role="separator"
+           aria-orientation="horizontal"
+           aria-label="调整项目区高度"
+           tabindex="0"></div>
 
-      <div class="scratch-head">
-        <span class="scratch-title">📝 便签</span>
-        <span id="scratch-save-state" class="scratch-save-state"></span>
-        <button id="scratch-toggle" class="scratch-toggle" title="收起 / 展开">⟨</button>
-      </div>
-      <textarea id="scratch-note" class="scratch-note"
-                placeholder="随手记…&#10;&#10;自动保存，不怕丢。&#10;⌘⇧N 从任何地方呼出。"></textarea>
-      <div class="scratch-footer">
-        <button id="scratch-to-notes"
-                title="便签本身已自动保存在本机。点这个是把内容复制一份到 Apple 备忘录的 steelg8 文件夹，iCloud 会同步到你的 iPhone / iPad。">📤 同步到 iPhone</button>
-        <button id="scratch-clear" class="secondary" title="清空本机便签（已同步到备忘录的不受影响）">清空</button>
-      </div>
+      <section id="sidebar-conv" class="sidebar-conv sidebar-card" hidden aria-hidden="true">
+        <div class="sp-head">
+          <span class="sp-title">💬 对话</span>
+          <button id="conv-new-btn" class="sp-btn" title="开一个新会话">+ 新建</button>
+        </div>
+        <div id="conv-list" class="conv-list"></div>
+      </section>
+
+      <div id="conversation-stack-resizer"
+           class="stack-resizer stack-resizer-conversation"
+           role="separator"
+           aria-orientation="horizontal"
+           aria-label="调整对话区和便签区高度"
+           tabindex="0"
+           hidden></div>
+
+      <section class="scratch-panel sidebar-card">
+        <div class="scratch-head">
+          <span class="scratch-title">📝 便签</span>
+          <span id="scratch-save-state" class="scratch-save-state"></span>
+          <button id="scratch-toggle" class="scratch-toggle" title="收起 / 展开">⟨</button>
+        </div>
+        <textarea id="scratch-note" class="scratch-note"
+                  placeholder="随手记…&#10;&#10;自动保存，不怕丢。&#10;⌘⇧N 从任何地方呼出。"></textarea>
+        <div class="scratch-footer">
+          <button id="scratch-to-notes"
+                  title="便签本身已自动保存在本机。点这个是把内容复制一份到 Apple 备忘录的 steelg8 文件夹，iCloud 会同步到你的 iPhone / iPad。">📤 同步到 iPhone</button>
+          <button id="scratch-clear" class="secondary" title="清空本机便签（已同步到备忘录的不受影响）">清空</button>
+        </div>
+      </section>
     </aside>
+
+    <div id="scratch-resizer"
+         class="pane-resizer pane-resizer-left"
+         role="separator"
+         aria-orientation="vertical"
+         aria-label="调整左侧栏宽度"
+         tabindex="0"></div>
 
     <main class="chat-col">
       <div id="messages" class="messages">
@@ -75,17 +101,36 @@
         </div>
       </div>
 
+      <div id="composer-resizer"
+           class="chat-resizer"
+           role="separator"
+           aria-orientation="horizontal"
+           aria-label="调整对话输入框高度"
+           tabindex="0"></div>
+
       <footer class="composer">
-        <div class="status-bar">
-          <span id="routing-hint" class="routing-hint"></span>
-          <span id="error-hint" class="error-hint"></span>
-        </div>
-        <div class="input-row">
-          <textarea id="input" rows="2" placeholder="输入消息，⌘/Ctrl + Enter 发送"></textarea>
-          <button id="send" class="send-btn">发送</button>
+        <div class="composer-card">
+          <textarea id="input" rows="2" placeholder="输入消息，回车发送 · Shift + 回车换行 · 发送中按 Esc 停止"></textarea>
+          <div class="composer-bottom">
+            <div class="status-bar">
+              <span id="routing-hint" class="routing-hint"></span>
+              <span id="error-hint" class="error-hint"></span>
+            </div>
+            <div class="composer-actions">
+              <button id="send" class="send-btn" title="发送（回车）">发送</button>
+              <button id="stop" class="stop-btn" style="display:none" title="停止生成（Esc）">停止</button>
+            </div>
+          </div>
         </div>
       </footer>
     </main>
+
+    <div id="canvas-resizer"
+         class="pane-resizer pane-resizer-right"
+         role="separator"
+         aria-orientation="vertical"
+         aria-label="调整 Canvas 宽度"
+         tabindex="0"></div>
 
     <section id="canvas" class="canvas" data-mode="closed">
       <div class="canvas-head">
@@ -113,10 +158,10 @@
   </div>
 </div>
 
-<!-- Mermaid 本地打包（不走 CDN，打开 app 即用） -->
-<script src="vendor/mermaid.min.js"></script>
-
+<!-- Mermaid 不再在父页加载；改由 mermaid-frame.html 在 sandbox iframe 内自己加载，
+     上游产物（SVG）留在 iframe 内，不再 innerHTML 进主文档。-->
 <script src="markdown.js"></script>
+<script src="api.js"></script>
 <script src="canvas.js"></script>
 <script src="chat.js"></script>
 </body>

@@ -1,11 +1,35 @@
+import AppKit
 import SwiftUI
+
+final class SteelG8AppDelegate: NSObject, NSApplicationDelegate {
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        NSApp.setActivationPolicy(.regular)
+        AppController.shared.setup()
+        DispatchQueue.main.async {
+            AppController.shared.showMainWindow()
+        }
+    }
+
+    func applicationShouldHandleReopen(
+        _ sender: NSApplication,
+        hasVisibleWindows flag: Bool
+    ) -> Bool {
+        AppController.shared.showMainWindow()
+        return true
+    }
+
+    func applicationDidBecomeActive(_ notification: Notification) {
+        AppController.shared.ensureStatusBarVisible()
+    }
+}
 
 @main
 struct SteelG8App: App {
+    @NSApplicationDelegateAdaptor(SteelG8AppDelegate.self) private var appDelegate
     @StateObject private var appController = AppController.shared
 
     var body: some Scene {
-        WindowGroup {
+        WindowGroup("steelg8", id: "main") {
             ContentView()
                 .environmentObject(appController)
                 .task {
@@ -17,7 +41,7 @@ struct SteelG8App: App {
 
         // macOS Settings scene：自动接 ⌘, 快捷键 + 菜单栏"设置…"
         Settings {
-            SettingsView()
+            SettingsHostView()
         }
     }
 }

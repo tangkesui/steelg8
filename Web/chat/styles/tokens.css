@@ -1,0 +1,62 @@
+:root {
+  --bg: #0f1014;
+  --bg-elevated: #1a1c22;
+  --bg-input: #22252d;
+  --border: rgba(255, 255, 255, 0.08);
+  --text: #e8e9ee;
+  --text-dim: #8a8e99;
+  --text-muted: #5a5e6b;
+  /* 选中/高亮用中性灰色系（替代原橙色） */
+  --accent: #e0e2ea;
+  --accent-hover: #ffffff;
+  /* 只有发送按钮用蓝色 */
+  --send-blue: #4a8bff;
+  --send-blue-hover: #6ba0ff;
+  --user-bubble: #2b2f3a;
+  --assistant-bubble: transparent;
+  --error: #ff6b6b;
+  --success: #6bff9b;
+  --scratch-width: 280px;
+  --canvas-width: 420px;
+  --project-panel-height: 112px;
+  --conversation-panel-height: 180px;
+  --composer-height: 132px;
+  --pane-resizer-width: 8px;
+  --stack-resizer-height: 8px;
+  --chat-content-width: 860px;
+  --font-sans: -apple-system, "SF Pro Text", "PingFang SC", "Helvetica Neue",
+    Helvetica, Arial, sans-serif;
+  --font-mono: "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    --bg: #f7f7f5;
+    --bg-elevated: #ffffff;
+    --bg-input: #ffffff;
+    --border: rgba(0, 0, 0, 0.08);
+    --text: #1a1c22;
+    --text-dim: #595d6b;
+    --text-muted: #9a9ea9;
+    --user-bubble: #ece8e1;
+    --assistant-bubble: transparent;
+    /* 亮色模式下高亮色改成深灰，才能在白底上看清 */
+    --accent: #2b2f3a;
+    --accent-hover: #1a1c22;
+  }
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}

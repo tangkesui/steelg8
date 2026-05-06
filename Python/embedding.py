@@ -18,13 +18,12 @@ Embedding 封装：阿里云百炼（DashScope）Qwen Embedding 系列，走 Ope
 
 from __future__ import annotations
 
-import json
 import os
 from dataclasses import dataclass
 from typing import Any
-from urllib import request, error
 
 from providers import ProviderRegistry
+import network
 
 
 # ---- 默认配置 ----
@@ -88,23 +87,21 @@ def embed(
             "dimensions": dimensions,
             "encoding_format": "float",
         }
-        req = request.Request(
-            url,
-            data=json.dumps(payload).encode("utf-8"),
-            headers={
-                "Authorization": f"Bearer {provider.api_key()}",
-                "Content-Type": "application/json",
-            },
-            method="POST",
-        )
         try:
-            with request.urlopen(req, timeout=timeout) as resp:
-                body = json.loads(resp.read().decode("utf-8"))
-        except error.HTTPError as exc:
-            detail = exc.read().decode("utf-8", errors="replace")[:400] if exc.fp else ""
-            raise EmbeddingError(f"HTTP {exc.code}: {detail}") from exc
-        except error.URLError as exc:
-            raise EmbeddingError(f"网络错误：{exc}") from exc
+            body = network.request_json(
+                url,
+                method="POST",
+                payload=payload,
+                headers={
+                    "Authorization": f"Bearer {provider.api_key()}",
+                },
+                timeout=timeout,
+                retries=1,
+            )
+        except network.NetworkError as exc:
+            raise EmbeddingError(str(exc)) from exc
+        if not isinstance(body, dict):
+            raise EmbeddingError("embedding 响应不是 JSON 对象")
 
         data = body.get("data") or []
         if len(data) != len(batch):

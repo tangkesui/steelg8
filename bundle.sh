@@ -3,6 +3,7 @@ set -e
 
 APP_NAME="steelg8"
 APP_DIR=".build/steelg8.app"
+APP_DIR_ABS="$(cd "$(dirname "${APP_DIR}")" && pwd)/$(basename "${APP_DIR}")"
 CONTENTS="${APP_DIR}/Contents"
 MACOS="${CONTENTS}/MacOS"
 RESOURCES="${CONTENTS}/Resources"
@@ -28,6 +29,31 @@ fi
 echo "🔨 编译中..."
 DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
   /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swift build 2>&1
+
+# 运行中的 LSUIElement app 不会因为 open 自动换成新二进制；先停旧实例，
+# 否则容易出现“打包成功但实际还是旧 app / 旧 Python 内核”的错觉。
+if pgrep -x "${APP_NAME}" >/dev/null 2>&1; then
+    echo "🛑 关闭正在运行的 ${APP_NAME}..."
+    pkill -x "${APP_NAME}" || true
+    for _ in {1..30}; do
+        if ! pgrep -x "${APP_NAME}" >/dev/null 2>&1; then
+            break
+        fi
+        sleep 0.2
+    done
+fi
+
+KERNEL_PATTERN="${APP_DIR_ABS}/Contents/Resources/Python/server.py"
+if pgrep -f "${KERNEL_PATTERN}" >/dev/null 2>&1; then
+    echo "🛑 清理旧 Python 内核..."
+    pkill -f "${KERNEL_PATTERN}" || true
+    for _ in {1..30}; do
+        if ! pgrep -f "${KERNEL_PATTERN}" >/dev/null 2>&1; then
+            break
+        fi
+        sleep 0.2
+    done
+fi
 
 # Ensure .app skeleton + always rewrite Info.plist (idempotent)
 mkdir -p "${MACOS}" "${RESOURCES}"
@@ -56,6 +82,8 @@ cat > "${CONTENTS}/Info.plist" << 'PLIST'
     <string>6.0</string>
     <key>LSMinimumSystemVersion</key>
     <string>14.0</string>
+    <key>LSUIElement</key>
+    <true/>
     <key>NSHighResolutionCapable</key>
     <true/>
     <key>NSAppleEventsUsageDescription</key>

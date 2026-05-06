@@ -18,11 +18,16 @@ Phase 2 Step 3：+ .pdf（pypdf）、.pptx（python-pptx）、.doc（macOS textu
 from __future__ import annotations
 
 import os
+import re
 import shutil as _shutil
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterable, Iterator
+from typing import Any, Iterable, Iterator
+
+from document import chunkers as document_chunkers
+from document import registry as document_registry
+from document.blocks import ParsedDocument
 
 
 # ---- 配置常量 ----
@@ -110,10 +115,60 @@ class Chunk:
     chunk_idx: int
     text: str
     approx_tokens: int = field(default=0)
+    source_path: str = ""
+    page: int | None = None
+    heading: str = ""
+    paragraph_idx: int = 0
+    start_char: int = 0
+    end_char: int = 0
+    content_hash: str = ""
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if self.approx_tokens == 0:
             object.__setattr__(self, "approx_tokens", _approx_tokens(self.text))
+        if not self.source_path:
+            self.source_path = self.rel_path
+        if not self.end_char:
+            self.end_char = self.start_char + len(self.text)
+        if not self.content_hash:
+            self.content_hash = text_hash(self.text)
+
+
+@dataclass(frozen=True)
+class ParserDiagnostics:
+    rel_path: str
+    parser: str
+    title: str
+    block_count: int
+    chunk_count: int
+    char_count: int
+    table_count: int
+    code_count: int
+    heading_count: int
+    list_count: int
+    empty_text: bool
+    truncated: bool
+    chunk_profile: str
+    block_types: dict[str, int]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "relPath": self.rel_path,
+            "parser": self.parser,
+            "title": self.title,
+            "blockCount": self.block_count,
+            "chunkCount": self.chunk_count,
+            "charCount": self.char_count,
+            "tableCount": self.table_count,
+            "codeCount": self.code_count,
+            "headingCount": self.heading_count,
+            "listCount": self.list_count,
+            "emptyText": self.empty_text,
+            "truncated": self.truncated,
+            "chunkProfile": self.chunk_profile,
+            "blockTypes": dict(self.block_types),
+        }
 
 
 # ---- 公开 API ----
@@ -177,30 +232,99 @@ def walk_project(root: str) -> Iterator[FileRef]:
     yield from results
 
 
-def read_text(abs_path: str) -> str:
-    """把支持的文件读成纯文本。根据扩展名走不同解析器。
-    统一在出口做长度截断，防止一份超大 PDF 把 embedding 管线打爆。
-    """
-    ext = Path(abs_path).suffix.lower()
-    if ext == ".docx":
-        raw = read_docx(abs_path)
-    elif ext == ".pdf":
-        raw = read_pdf(abs_path)
-    elif ext == ".pptx":
-        raw = read_pptx(abs_path)
-    elif ext == ".doc":
-        raw = read_legacy_doc(abs_path)
-    else:
-        try:
-            with open(abs_path, "r", encoding="utf-8") as f:
-                raw = f.read()
-        except UnicodeDecodeError:
-            with open(abs_path, "r", encoding="latin-1") as f:
-                raw = f.read()
+def parse_document(abs_path: str, *, rel_path: str | None = None) -> ParsedDocument:
+    """Parse a source file into structured document blocks.
 
-    if len(raw) > MAX_EXTRACT_CHARS:
-        raw = raw[:MAX_EXTRACT_CHARS] + "\n\n…（抽取内容已截断，超过 {:,} 字）".format(MAX_EXTRACT_CHARS)
-    return raw
+    This is the new document pipeline entry. `read_text` remains as a legacy
+    compatibility wrapper for callers that still expect plain text.
+    """
+    return document_registry.parse_file(abs_path, rel_path=rel_path, max_chars=MAX_EXTRACT_CHARS)
+
+
+def read_text(abs_path: str) -> str:
+    """把支持的文件读成纯文本。保留旧 API，内部已切到结构化 parser。"""
+    return parse_document(abs_path).to_text()
+
+
+def chunk_document(
+    document: ParsedDocument,
+    *,
+    target_tokens: int = 500,
+    overlap_chars: int = 100,
+    chunk_profile: str = "default",
+) -> list[Chunk]:
+    block_chunks = document_chunkers.chunk_document(
+        document,
+        target_tokens=target_tokens,
+        overlap_chars=overlap_chars,
+        profile=chunk_profile,
+    )
+    return [
+        Chunk(
+            rel_path=c.rel_path,
+            chunk_idx=c.chunk_idx,
+            text=c.text,
+            approx_tokens=c.approx_tokens,
+            source_path=c.source_path,
+            page=c.page,
+            heading=c.heading,
+            paragraph_idx=c.paragraph_idx,
+            start_char=c.start_char,
+            end_char=c.end_char,
+            content_hash=c.content_hash,
+            metadata=dict(c.metadata or {}),
+        )
+        for c in block_chunks
+    ]
+
+
+def parser_diagnostics(
+    document: ParsedDocument,
+    chunks: list[Chunk],
+    *,
+    chunk_profile: str = "default",
+) -> ParserDiagnostics:
+    block_types: dict[str, int] = {}
+    char_count = 0
+    for block in document.blocks:
+        block_types[block.type] = block_types.get(block.type, 0) + 1
+        char_count += max(0, block.end_char - block.start_char)
+    return ParserDiagnostics(
+        rel_path=document.rel_path,
+        parser=document.parser,
+        title=document.title,
+        block_count=len(document.blocks),
+        chunk_count=len(chunks),
+        char_count=char_count,
+        table_count=block_types.get("table", 0),
+        code_count=block_types.get("code", 0),
+        heading_count=block_types.get("heading", 0),
+        list_count=block_types.get("list", 0),
+        empty_text=not any(block.text.strip() for block in document.blocks),
+        truncated=bool(document.metadata.get("truncated")),
+        chunk_profile=chunk_profile,
+        block_types=block_types,
+    )
+
+
+def file_hash(abs_path: str, *, chunk_size: int = 1024 * 1024) -> str:
+    """Return a sha256 hash of the raw file bytes for incremental indexing."""
+    import hashlib
+
+    h = hashlib.sha256()
+    with open(abs_path, "rb") as f:
+        while True:
+            b = f.read(chunk_size)
+            if not b:
+                break
+            h.update(b)
+    return h.hexdigest()
+
+
+def text_hash(text: str) -> str:
+    import hashlib
+
+    return hashlib.sha256((text or "").encode("utf-8")).hexdigest()
 
 
 def read_docx(abs_path: str) -> str:
@@ -393,58 +517,99 @@ def chunk_text(
     *,
     target_tokens: int = 500,
     overlap_chars: int = 100,
+    chunk_profile: str = "default",
 ) -> list[Chunk]:
     """把单个文件的全文切成 Chunk 列表。"""
     if not text.strip():
         return []
 
-    # 先按"两个及以上换行"拆成段
-    paragraphs = [p.strip() for p in text.replace("\r\n", "\n").split("\n\n") if p.strip()]
+    document = document_registry.parse_text(text, rel_path=rel_path, parser="legacy-text")
+    return chunk_document(
+        document,
+        target_tokens=target_tokens,
+        overlap_chars=overlap_chars,
+        chunk_profile=chunk_profile,
+    )
 
-    chunks: list[Chunk] = []
-    buf: list[str] = []
-    buf_tokens = 0
 
-    def flush() -> None:
-        nonlocal buf, buf_tokens
-        if not buf:
-            return
-        body = "\n\n".join(buf).strip()
-        if body:
-            chunks.append(Chunk(rel_path=rel_path, chunk_idx=len(chunks), text=body))
-        buf = []
-        buf_tokens = 0
+@dataclass
+class _Paragraph:
+    text: str
+    start_char: int
+    end_char: int
+    paragraph_idx: int
+    page: int | None
+    heading: str
 
-    for para in paragraphs:
-        para_tokens = _approx_tokens(para)
 
-        # 段落自身超长 → 按句号拆
-        if para_tokens > target_tokens * 2:
-            flush()
-            for sub in _split_long_paragraph(para, target_tokens):
-                chunks.append(Chunk(rel_path=rel_path, chunk_idx=len(chunks), text=sub))
+_PAGE_MARKER_RE = re.compile(r"<!--\s*page\s+(\d+)\s*-->", re.IGNORECASE)
+_HEADING_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*$")
+
+
+def _paragraphs_with_metadata(text: str) -> list[_Paragraph]:
+    normalized = text.replace("\r\n", "\n")
+    out: list[_Paragraph] = []
+    page: int | None = None
+    heading = ""
+    paragraph_idx = 0
+
+    for match in re.finditer(r"\S.*?(?=\n\s*\n|\Z)", normalized, flags=re.DOTALL):
+        raw = match.group(0)
+        leading = len(raw) - len(raw.lstrip())
+        trailing = len(raw.rstrip())
+        start = match.start() + leading
+        end = match.start() + trailing
+        para = raw.strip()
+        if not para:
             continue
 
-        if buf_tokens + para_tokens > target_tokens and buf:
-            flush()
-        buf.append(para)
-        buf_tokens += para_tokens
+        page_match = _PAGE_MARKER_RE.search(para)
+        if page_match:
+            try:
+                page = int(page_match.group(1))
+            except ValueError:
+                pass
+            para = _PAGE_MARKER_RE.sub("", para).strip()
+            if not para:
+                continue
 
-    flush()
+        heading_match = _HEADING_RE.match(para.splitlines()[0].strip())
+        if heading_match:
+            heading = heading_match.group(2).strip()
 
-    # 添加重叠：在每一块末尾接一段下一块的前缀
-    if overlap_chars > 0 and len(chunks) > 1:
-        overlapped: list[Chunk] = []
-        for i, c in enumerate(chunks):
-            text_with_overlap = c.text
-            if i + 1 < len(chunks):
-                next_start = chunks[i + 1].text[:overlap_chars]
-                if next_start:
-                    text_with_overlap = c.text + "\n\n…(continued)…\n" + next_start
-            overlapped.append(Chunk(rel_path=c.rel_path, chunk_idx=i, text=text_with_overlap))
-        return overlapped
+        out.append(
+            _Paragraph(
+                text=para,
+                start_char=start,
+                end_char=end,
+                paragraph_idx=paragraph_idx,
+                page=page,
+                heading=heading,
+            )
+        )
+        paragraph_idx += 1
+    return out
 
-    return chunks
+
+def _chunk_from_parts(
+    rel_path: str,
+    chunk_idx: int,
+    body: str,
+    parts: list[_Paragraph],
+) -> Chunk:
+    first = parts[0]
+    last = parts[-1]
+    return Chunk(
+        rel_path=rel_path,
+        chunk_idx=chunk_idx,
+        text=body,
+        source_path=rel_path,
+        page=first.page,
+        heading=first.heading,
+        paragraph_idx=first.paragraph_idx,
+        start_char=first.start_char,
+        end_char=last.end_char,
+    )
 
 
 def _split_long_paragraph(para: str, target_tokens: int) -> Iterable[str]:
@@ -466,6 +631,25 @@ def _split_long_paragraph(para: str, target_tokens: int) -> Iterable[str]:
         if tail:
             pieces.append(tail)
     return pieces
+
+
+def _split_long_paragraph_with_spans(para: _Paragraph, target_tokens: int) -> Iterable[_Paragraph]:
+    pieces = list(_split_long_paragraph(para.text, target_tokens))
+    cursor = 0
+    for idx, piece in enumerate(pieces):
+        rel_start = para.text.find(piece, cursor)
+        if rel_start < 0:
+            rel_start = cursor
+        rel_end = rel_start + len(piece)
+        cursor = rel_end
+        yield _Paragraph(
+            text=piece,
+            start_char=para.start_char + rel_start,
+            end_char=para.start_char + rel_end,
+            paragraph_idx=para.paragraph_idx + idx,
+            page=para.page,
+            heading=para.heading,
+        )
 
 
 # ---- 一把梭便捷函数 ----

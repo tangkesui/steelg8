@@ -3,261 +3,40 @@ Tool 注册表：把 docx_fill / docx_grow 等 skill 函数包装成 OpenAI tool
 供 LLM tool calling 用。
 
 设计要点：
-- tool 名字、描述、参数都用中文/直白写，让国内 LLM 也能理解
-- 每个 tool 对应一个 Python callable；dispatch() 负责解析 arguments 并执行
-- 路径安全：所有 path 参数必须 (1) 绝对路径，(2) 以 $HOME 开头，(3) 不含 '..'
-  —— 防止 LLM 一个抽风把 /etc 给写了
-- 返回 tool_result 是 dict，会被 json.dumps 后作为 'role:tool' 消息回给 LLM
+- tool schema 集中在 `skills.schemas`，本文件不再混入纯数据；
+- 路径安全在 `skills.path_safety`：所有 path 参数必须 resolve 后仍位于 $HOME 下；
+- dispatch() 解析 arguments → 调用 skill 函数 → 用 _enrich_tool_result 给失败结果补 hint。
+- 返回 tool_result 是 dict，会被 json.dumps 后作为 'role:tool' 消息回给 LLM。
 """
 
 from __future__ import annotations
 
 import json
-import os
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 import extract
 import knowledge as knowledge_mod
+import logger
 import memory
 import project as project_mod
 import templates as template_lib
+import time as _time
 import web as web_mod
 from providers import ProviderRegistry
-from skills import docx_diff, docx_fill, docx_grow
+from skills.docx import comments as docx_comments
+from skills.docx import convert as docx_convert
+from skills.docx import diff as docx_diff
+from skills.docx import edit as docx_edit
+from skills.docx import fill as docx_fill
+from skills.docx import grow as docx_grow
+from skills.docx import media as docx_media
+from skills.docx import page as docx_page
+from skills.docx import xml_io as docx_xml_io
+from skills.path_safety import DOCX_SUFFIXES as _DOCX_SUFFIXES
+from skills.path_safety import safe_path as _safe_path
+from skills.schemas import TOOLS
 
-
-# ---- 路径安全 ----
-
-def _safe_path(raw: Any, *, must_exist: bool = False) -> str:
-    if not isinstance(raw, str) or not raw:
-        raise ValueError("path 必须是非空字符串")
-    if ".." in raw:
-        raise ValueError(f"path 不允许 '..'：{raw}")
-    p = Path(raw).expanduser().resolve()
-    home = Path.home().resolve()
-    if not str(p).startswith(str(home)):
-        raise ValueError(f"path 必须在用户家目录下：{p}")
-    if must_exist and not p.exists():
-        raise ValueError(f"文件不存在：{p}")
-    return str(p)
-
-
-# ---- tool schemas（OpenAI function-calling 格式） ----
-
-TOOLS: list[dict[str, Any]] = [
-    {
-        "type": "function",
-        "function": {
-            "name": "docx_list_placeholders",
-            "description": "读一份 .docx 模板里所有 {{占位符}} 的名字。用户没告诉你要填什么时，先用它看模板需要哪些字段。",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": {"type": "string", "description": "模板 .docx 的绝对路径"},
-                },
-                "required": ["path"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "docx_fill",
-            "description": "把数据填进 .docx 模板的 {{key}} 占位符，另存为新文件。数据里可以嵌套：{\"project\": {\"name\": \"xxx\"}} 对应模板里 {{project.name}}。",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "template": {"type": "string", "description": "模板 .docx 绝对路径"},
-                    "data": {"type": "object", "description": "key-value 数据，支持嵌套"},
-                    "output": {"type": "string", "description": "输出 .docx 绝对路径；不填就在模板同目录生成 -filled.docx"},
-                },
-                "required": ["template", "data"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "docx_list_headings",
-            "description": "列出一份 .docx 里所有 Heading 1/2/3 标题（带级别和顺序）。想给文档插入新章节前先用它确认锚点。",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": {"type": "string", "description": "目标 .docx 的绝对路径"},
-                },
-                "required": ["path"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "docx_insert_section",
-            "description": "在某个标题所在章节末尾插入一个新标题 + 若干段落。'章节末尾' = 遇到下一个同级或更高级标题之前的位置。",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": {"type": "string", "description": "目标 .docx 绝对路径"},
-                    "afterHeading": {"type": "string", "description": "锚点标题的文本，必须和文档里的一致（标点、空格敏感）"},
-                    "newHeading": {"type": "string", "description": "要插入的新标题文本"},
-                    "newHeadingLevel": {"type": "integer", "description": "新标题级别 1-4，默认 2", "minimum": 1, "maximum": 4},
-                    "paragraphs": {"type": "array", "items": {"type": "string"}, "description": "新标题下要追加的段落文本数组，可以为空"},
-                    "output": {"type": "string", "description": "输出路径；不填就在原文件同目录生成 -edited.docx；填和 path 相同会原地写"},
-                },
-                "required": ["path", "afterHeading", "newHeading"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "docx_append_paragraphs",
-            "description": "在某个标题章节末尾追加若干段落（不新建子标题）。",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": {"type": "string"},
-                    "afterHeading": {"type": "string"},
-                    "paragraphs": {"type": "array", "items": {"type": "string"}},
-                    "output": {"type": "string"},
-                },
-                "required": ["path", "afterHeading", "paragraphs"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "docx_append_row",
-            "description": "向 docx 里的第 N 个表格（从 0 计数）追加一行。cells 按列顺序给值，少于表格列数会补空，多了截断。",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": {"type": "string"},
-                    "tableIndex": {"type": "integer", "description": "表格下标，从 0 开始", "minimum": 0},
-                    "cells": {"type": "array", "items": {"type": "string"}},
-                    "output": {"type": "string"},
-                },
-                "required": ["path", "tableIndex", "cells"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "docx_read",
-            "description": "把一份 .docx 抽成纯文本（Markdown 结构：标题用 #，表格转管道表）。当你需要看一份 docx 里到底写了什么才能决定怎么改时用它。",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": {"type": "string", "description": "要读的 .docx 绝对路径"},
-                },
-                "required": ["path"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "diff_documents",
-            "description": "对比两个文档（.md / .txt / .docx / .pdf / .pptx / .doc）的文本差异，返回 unified diff。你拿到 diff 后用自然语言向用户解读'改了什么、加了什么、删了什么'。两份文件都要能读到。",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "before": {"type": "string", "description": "旧版本的绝对路径"},
-                    "after": {"type": "string", "description": "新版本的绝对路径"},
-                    "context": {"type": "integer", "default": 2, "description": "diff 上下文行数"},
-                },
-                "required": ["before", "after"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "web_search",
-            "description": "用 Tavily 搜索互联网，返回前 N 条结果（标题 / URL / 摘要）。用户问最新政策 / 查资料 / 对比产品等场景用。要看全文再调 web_fetch。",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "query": {"type": "string"},
-                    "max_results": {"type": "integer", "default": 5, "minimum": 1, "maximum": 10},
-                    "search_depth": {"type": "string", "enum": ["basic", "advanced"], "default": "basic"},
-                },
-                "required": ["query"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "web_fetch",
-            "description": "用 Jina Reader 拉取任意 URL 的正文（markdown 格式）。免费。读 web_search 拿到的链接用它。",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "url": {"type": "string", "description": "必须 http:// 或 https:// 开头"},
-                },
-                "required": ["url"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "save_knowledge",
-            "description": (
-                "把一段重要信息存到知识库（~/.steelg8/knowledge/）。"
-                "不像 remember() 是贴在某个文件里的一行，save_knowledge 是**独立的知识卡片**，"
-                "每次对话都会被向量召回。适合：原创观点、客户典型反馈、值得反复引用的片段、"
-                "研究结论。title 要能一眼看懂是什么，content 是一段完整的话（>30 字）。"
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "title": {"type": "string"},
-                    "content": {"type": "string"},
-                    "source": {"type": "string", "description": "可选，内容来源，如 URL / 文件路径 / 对话 id"},
-                    "tags": {"type": "array", "items": {"type": "string"}},
-                },
-                "required": ["title", "content"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "templates_list",
-            "description": "列出用户模板库 ~/Documents/steelg8/templates/ 下的所有模板（.docx / .xlsx / .pptx），含每个模板的占位符清单。用户说'用模板 xxx'时先调这个看有什么可用。",
-            "parameters": {"type": "object", "properties": {}},
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "remember",
-            "description": (
-                "把一条重要信息写入记忆文件，下次对话你能看到。"
-                "scope='user' 写 ~/.steelg8/user.md（所有项目共享的你的偏好）；"
-                "scope='project' 写当前激活项目的 steelg8.md（项目背景/术语/决策）。"
-                "section 是要追加到的小节名（如 '写作口吻与偏好'、'干系人'），"
-                "找不到就新建。"
-                "用户明确说'记住 xxx' / 表达长期偏好 / 提到项目关键背景时使用。"
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "scope": {"type": "string", "enum": ["user", "project"]},
-                    "section": {"type": "string", "description": "目标 markdown 小节名，如 '写作口吻与偏好'"},
-                    "note": {"type": "string", "description": "要记下的内容，一两句话即可"},
-                },
-                "required": ["scope", "note"],
-            },
-        },
-    },
-]
 
 
 # ---- 调度 ----
@@ -266,14 +45,24 @@ TOOLS: list[dict[str, Any]] = [
 def dispatch(name: str, args: dict[str, Any], registry: "ProviderRegistry | None" = None) -> dict[str, Any]:
     """执行一个 tool call；总是返回 dict，异常会被转成 {'error': str}。
     registry 用于需要调云 API 的 tool（如 save_knowledge 要 embed）。"""
+    result = _dispatch_inner(name, args, registry)
+    return _enrich_tool_result(name, args, result)
+
+
+def _dispatch_inner(name: str, args: dict[str, Any], registry: "ProviderRegistry | None") -> dict[str, Any]:
+    started = _time.time()
+    args_preview = json.dumps(args, ensure_ascii=False)[:200]
     try:
         if name == "docx_list_placeholders":
-            path = _safe_path(args.get("path"), must_exist=True)
+            path = _safe_path(args.get("path"), must_exist=True, suffixes=_DOCX_SUFFIXES)
             return {"placeholders": docx_fill.list_placeholders(path)}
 
         if name == "docx_fill":
-            template = _safe_path(args.get("template"), must_exist=True)
-            output = _safe_path(args.get("output")) if args.get("output") else None
+            template = _safe_path(args.get("template"), must_exist=True, suffixes=_DOCX_SUFFIXES)
+            output = (
+                _safe_path(args.get("output"), suffixes=_DOCX_SUFFIXES, access="write")
+                if args.get("output") else None
+            )
             data = args.get("data") or {}
             r = docx_fill.fill(template, data, output_path=output)
             return {
@@ -284,12 +73,33 @@ def dispatch(name: str, args: dict[str, Any], registry: "ProviderRegistry | None
             }
 
         if name == "docx_list_headings":
-            path = _safe_path(args.get("path"), must_exist=True)
+            path = _safe_path(args.get("path"), must_exist=True, suffixes=_DOCX_SUFFIXES)
             return {"headings": docx_grow.list_headings(path)}
 
+        if name == "docx_build_outline":
+            path = _safe_path(args.get("path"), must_exist=True, suffixes=_DOCX_SUFFIXES)
+            output = (
+                _safe_path(args.get("output"), suffixes=_DOCX_SUFFIXES, access="write")
+                if args.get("output") else None
+            )
+            sections_raw = args.get("sections") or []
+            if not isinstance(sections_raw, list) or not sections_raw:
+                return {"error": "sections 不能为空，至少传一个章节"}
+            after = args.get("after") or None
+            r = docx_grow.build_outline(
+                path,
+                sections=sections_raw,
+                after=str(after) if after else None,
+                output_path=output,
+            )
+            return r  # 已经是 dict，含 output_path / total_inserted / sections / final_headings
+
         if name == "docx_insert_section":
-            path = _safe_path(args.get("path"), must_exist=True)
-            output = _safe_path(args.get("output")) if args.get("output") else None
+            path = _safe_path(args.get("path"), must_exist=True, suffixes=_DOCX_SUFFIXES)
+            output = (
+                _safe_path(args.get("output"), suffixes=_DOCX_SUFFIXES, access="write")
+                if args.get("output") else None
+            )
             r = docx_grow.insert_section_after_heading(
                 path,
                 after_heading=str(args.get("afterHeading", "")),
@@ -301,8 +111,11 @@ def dispatch(name: str, args: dict[str, Any], registry: "ProviderRegistry | None
             return {"output": r.output_path, "inserted": r.inserted_elements, "notes": r.notes}
 
         if name == "docx_append_paragraphs":
-            path = _safe_path(args.get("path"), must_exist=True)
-            output = _safe_path(args.get("output")) if args.get("output") else None
+            path = _safe_path(args.get("path"), must_exist=True, suffixes=_DOCX_SUFFIXES)
+            output = (
+                _safe_path(args.get("output"), suffixes=_DOCX_SUFFIXES, access="write")
+                if args.get("output") else None
+            )
             r = docx_grow.append_paragraphs_after_heading(
                 path,
                 after_heading=str(args.get("afterHeading", "")),
@@ -312,8 +125,11 @@ def dispatch(name: str, args: dict[str, Any], registry: "ProviderRegistry | None
             return {"output": r.output_path, "inserted": r.inserted_elements}
 
         if name == "docx_append_row":
-            path = _safe_path(args.get("path"), must_exist=True)
-            output = _safe_path(args.get("output")) if args.get("output") else None
+            path = _safe_path(args.get("path"), must_exist=True, suffixes=_DOCX_SUFFIXES)
+            output = (
+                _safe_path(args.get("output"), suffixes=_DOCX_SUFFIXES, access="write")
+                if args.get("output") else None
+            )
             r = docx_grow.append_table_row(
                 path,
                 table_index=int(args.get("tableIndex", 0)),
@@ -322,8 +138,214 @@ def dispatch(name: str, args: dict[str, Any], registry: "ProviderRegistry | None
             )
             return {"output": r.output_path, "inserted": r.inserted_elements}
 
+        if name == "docx_insert_table":
+            path = _safe_path(args.get("path"), must_exist=True, suffixes=_DOCX_SUFFIXES)
+            output = (
+                _safe_path(args.get("output"), suffixes=_DOCX_SUFFIXES, access="write")
+                if args.get("output") else None
+            )
+            return docx_edit.insert_table(
+                path,
+                after_heading=str(args.get("afterHeading", "")),
+                headers=list(args.get("headers") or []),
+                rows=list(args.get("rows") or []),
+                caption=str(args["caption"]) if args.get("caption") else None,
+                font_size=int(args.get("fontSize", 10)),
+                output_path=output,
+            )
+
+        if name == "docx_replace_text":
+            path = _safe_path(args.get("path"), must_exist=True, suffixes=_DOCX_SUFFIXES)
+            output = (
+                _safe_path(args.get("output"), suffixes=_DOCX_SUFFIXES, access="write")
+                if args.get("output") else None
+            )
+            replacements = args.get("replacements") or {}
+            if not isinstance(replacements, dict) or not replacements:
+                return {"error": "replacements 必须是非空 dict"}
+            return docx_edit.replace_text(
+                path,
+                replacements={str(k): str(v) for k, v in replacements.items()},
+                scope=str(args.get("scope", "all")),
+                output_path=output,
+            )
+
+        if name == "docx_rename_heading":
+            path = _safe_path(args.get("path"), must_exist=True, suffixes=_DOCX_SUFFIXES)
+            output = (
+                _safe_path(args.get("output"), suffixes=_DOCX_SUFFIXES, access="write")
+                if args.get("output") else None
+            )
+            return docx_edit.rename_heading(
+                path,
+                old_title=str(args.get("oldTitle", "")),
+                new_title=str(args.get("newTitle", "")),
+                level=int(args["level"]) if args.get("level") is not None else None,
+                output_path=output,
+            )
+
+        if name == "docx_delete_section":
+            path = _safe_path(args.get("path"), must_exist=True, suffixes=_DOCX_SUFFIXES)
+            output = (
+                _safe_path(args.get("output"), suffixes=_DOCX_SUFFIXES, access="write")
+                if args.get("output") else None
+            )
+            return docx_edit.delete_section(
+                path,
+                heading=str(args.get("heading", "")),
+                level=int(args["level"]) if args.get("level") is not None else None,
+                delete_range=str(args.get("deleteRange", "heading_only")),
+                output_path=output,
+            )
+
+        if name == "docx_check_compliance":
+            path = _safe_path(args.get("path"), must_exist=True, suffixes=_DOCX_SUFFIXES)
+            required_headings = args.get("requiredHeadings") or None
+            required_tables = args.get("requiredTables") or None
+            if required_headings and not isinstance(required_headings, list):
+                return {"error": "requiredHeadings 必须是数组"}
+            if required_tables and not isinstance(required_tables, dict):
+                return {"error": "requiredTables 必须是 object"}
+            return docx_edit.check_compliance(
+                path,
+                required_headings=list(required_headings) if required_headings else None,
+                required_tables={
+                    str(k): list(v) for k, v in (required_tables or {}).items()
+                } if required_tables else None,
+            )
+
+        if name == "docx_validate":
+            path = _safe_path(args.get("path"), must_exist=True, suffixes=_DOCX_SUFFIXES)
+            return docx_xml_io.validate(path)
+
+        if name == "docx_list_tracked_changes":
+            path = _safe_path(args.get("path"), must_exist=True, suffixes=_DOCX_SUFFIXES)
+            changes = docx_xml_io.iter_tracked_changes(path)
+            return {
+                "count": len(changes),
+                "changes": changes,
+                "authors": sorted({c["author"] for c in changes if c.get("author")}),
+            }
+
+        if name == "docx_resolve_tracked_changes":
+            path = _safe_path(args.get("path"), must_exist=True, suffixes=_DOCX_SUFFIXES)
+            mode = str(args.get("mode", "accept")).lower()
+            if mode not in ("accept", "reject"):
+                return {"error": "mode 必须是 'accept' 或 'reject'"}
+            output = (
+                _safe_path(args.get("output"), suffixes=_DOCX_SUFFIXES, access="write")
+                if args.get("output") else None
+            )
+            # 默认输出走项目版本路径
+            if not output:
+                active = project_mod.get_active()
+                if active:
+                    out = project_mod.next_version_path(Path(path).stem, ext=".docx",
+                                                        label=f"{mode}-changes")
+                    output = str(out) if out else None
+
+            before_changes = docx_xml_io.iter_tracked_changes(path)
+            if mode == "accept":
+                out_path = docx_xml_io.accept_all_changes(path, output_path=output)
+            else:
+                out_path = docx_xml_io.reject_all_changes(path, output_path=output)
+            return {
+                "output_path": str(out_path),
+                "mode": mode,
+                "resolved_count": len(before_changes),
+                "by_author": {
+                    a: sum(1 for c in before_changes if c.get("author") == a)
+                    for a in sorted({c.get("author", "") for c in before_changes})
+                },
+            }
+
+        if name == "docx_convert_to_docx":
+            # 允许多种输入格式，不走 _DOCX_SUFFIXES
+            path = _safe_path(args.get("path"), must_exist=True,
+                              suffixes={".doc", ".docx", ".rtf", ".odt", ".wps",
+                                        ".html", ".htm", ".txt", ".md"})
+            output_dir = args.get("output_dir")
+            if output_dir:
+                output_dir = _safe_path(output_dir, access="write")
+            try:
+                return docx_convert.convert_to_docx(path, output_dir=output_dir)
+            except docx_convert.DocxConvertError as exc:
+                return {"error": str(exc)}
+
+        if name == "docx_insert_image":
+            path = _safe_path(args.get("path"), must_exist=True, suffixes=_DOCX_SUFFIXES)
+            image_path = _safe_path(args.get("imagePath"), must_exist=True,
+                                    suffixes={".png", ".jpg", ".jpeg", ".gif",
+                                              ".bmp", ".tiff", ".webp"})
+            output = (
+                _safe_path(args.get("output"), suffixes=_DOCX_SUFFIXES, access="write")
+                if args.get("output") else None
+            )
+            return docx_media.insert_image(
+                path,
+                image_path=image_path,
+                after_heading=str(args.get("afterHeading", "")),
+                width_cm=float(args["widthCm"]) if args.get("widthCm") is not None else None,
+                height_cm=float(args["heightCm"]) if args.get("heightCm") is not None else None,
+                caption=str(args["caption"]) if args.get("caption") else None,
+                output_path=output,
+            )
+
+        if name == "docx_set_header_footer":
+            path = _safe_path(args.get("path"), must_exist=True, suffixes=_DOCX_SUFFIXES)
+            output = (
+                _safe_path(args.get("output"), suffixes=_DOCX_SUFFIXES, access="write")
+                if args.get("output") else None
+            )
+            return docx_page.set_header_footer(
+                path,
+                header_text=str(args["headerText"]) if args.get("headerText") is not None else None,
+                footer_text=str(args["footerText"]) if args.get("footerText") is not None else None,
+                footer_with_page_number=bool(args.get("footerWithPageNumber", False)),
+                section_index=int(args.get("sectionIndex", 0)),
+                output_path=output,
+            )
+
+        if name == "docx_insert_toc":
+            path = _safe_path(args.get("path"), must_exist=True, suffixes=_DOCX_SUFFIXES)
+            output = (
+                _safe_path(args.get("output"), suffixes=_DOCX_SUFFIXES, access="write")
+                if args.get("output") else None
+            )
+            return docx_page.insert_toc(
+                path,
+                title=str(args.get("title", "目录")),
+                levels=str(args.get("levels", "1-3")),
+                after_heading=str(args["afterHeading"]) if args.get("afterHeading") else None,
+                output_path=output,
+            )
+
+        if name == "docx_list_comments":
+            path = _safe_path(args.get("path"), must_exist=True, suffixes=_DOCX_SUFFIXES)
+            items = docx_comments.list_comments(path)
+            return {
+                "count": len(items),
+                "comments": items,
+                "authors": sorted({c.get("author", "") for c in items if c.get("author")}),
+            }
+
+        if name == "docx_add_comment":
+            path = _safe_path(args.get("path"), must_exist=True, suffixes=_DOCX_SUFFIXES)
+            output = (
+                _safe_path(args.get("output"), suffixes=_DOCX_SUFFIXES, access="write")
+                if args.get("output") else None
+            )
+            return docx_comments.add_comment(
+                path,
+                target_text=str(args.get("targetText", "")),
+                comment_text=str(args.get("commentText", "")),
+                author=str(args.get("author", "steelg8")),
+                initials=str(args.get("initials", "s8")),
+                output_path=output,
+            )
+
         if name == "docx_read":
-            path = _safe_path(args.get("path"), must_exist=True)
+            path = _safe_path(args.get("path"), must_exist=True, suffixes=_DOCX_SUFFIXES)
             txt = extract.read_docx(path)
             # 避免 tool response 超长；截断就好
             if len(txt) > 8000:
@@ -331,8 +353,8 @@ def dispatch(name: str, args: dict[str, Any], registry: "ProviderRegistry | None
             return {"text": txt}
 
         if name == "diff_documents":
-            before = _safe_path(args.get("before"), must_exist=True)
-            after = _safe_path(args.get("after"), must_exist=True)
+            before = _safe_path(args.get("before"), must_exist=True, suffixes=_DOCX_SUFFIXES)
+            after = _safe_path(args.get("after"), must_exist=True, suffixes=_DOCX_SUFFIXES)
             return docx_diff.diff_files(
                 before, after,
                 context=int(args.get("context", 2)),
@@ -413,11 +435,108 @@ def dispatch(name: str, args: dict[str, Any], registry: "ProviderRegistry | None
                 return {"ok": True, "scope": "project", "section": section, "note": note}
             return {"error": f"scope 必须是 'user' 或 'project'：{scope}"}
 
+        if name == "project_find_references":
+            active = project_mod.get_active()
+            if not active:
+                return {"error": "当前没有激活的项目。先在侧栏「打开…」选一个项目目录。"}
+            root = Path(active["path"]).expanduser()
+            suffix_filter = (args.get("suffix_filter") or "").lower().strip()
+            allowed = {".docx", ".xlsx", ".pptx", ".pdf", ".md"}
+            if suffix_filter:
+                allowed = {suffix_filter if suffix_filter.startswith(".") else "." + suffix_filter}
+
+            items: list[dict[str, Any]] = []
+            for p in root.rglob("*"):
+                # 跳过输出目录自身，避免自闭环
+                if project_mod.OUTPUT_DIR_NAME in p.parts:
+                    continue
+                if not p.is_file():
+                    continue
+                if p.suffix.lower() not in allowed:
+                    continue
+                try:
+                    stat = p.stat()
+                except OSError:
+                    continue
+                items.append({
+                    "path": str(p),
+                    "rel": str(p.relative_to(root)),
+                    "suffix": p.suffix.lower(),
+                    "size_bytes": stat.st_size,
+                    "mtime": int(stat.st_mtime),
+                })
+            items.sort(key=lambda x: (-x["mtime"], x["rel"]))
+            out_dir = project_mod.output_dir(ensure=True)
+            return {
+                "project": {
+                    "name": active.get("name", ""),
+                    "path": str(root),
+                },
+                "output_dir": str(out_dir) if out_dir else "",
+                "count": len(items),
+                "files": items[:40],  # 截断避免返回太大
+                "truncated": len(items) > 40,
+            }
+
+        if name == "project_output_path":
+            active = project_mod.get_active()
+            if not active:
+                return {"error": "当前没有激活的项目，无法分配输出路径"}
+            task_name = str(args.get("task_name") or "").strip()
+            if not task_name:
+                return {"error": "task_name 不能为空"}
+            suffix = str(args.get("suffix") or ".docx").strip()
+            if not suffix.startswith("."):
+                suffix = "." + suffix
+            label = str(args.get("label") or "").strip()
+            p = project_mod.next_version_path(task_name, ext=suffix, label=label)
+            if not p:
+                return {"error": "分配输出路径失败"}
+            return {
+                "output_path": str(p),
+                "task_dir": str(p.parent),
+                "version": p.stem,
+            }
+
         return {"error": f"未知 tool: {name}"}
     except ValueError as exc:
+        logger.warn("tool.arg_error", tool=name, args=args_preview, error=str(exc),
+                    duration_ms=int((_time.time() - started) * 1000))
         return {"error": f"参数错误：{exc}"}
     except Exception as exc:  # noqa: BLE001
+        logger.error("tool.exception", exc=exc, tool=name, args=args_preview,
+                     duration_ms=int((_time.time() - started) * 1000))
         return {"error": f"{exc.__class__.__name__}: {exc}"}
+    finally:
+        pass  # 成功路径不记录（太吵），出错才记
+
+
+def _enrich_tool_result(name: str, args: dict[str, Any], result: dict[str, Any]) -> dict[str, Any]:
+    """给 tool 结果增强：失败时附 hint 引导 LLM 正确恢复。"""
+    if not isinstance(result, dict):
+        return result
+    err = result.get("error", "")
+
+    # docx_insert_section / docx_append_paragraphs 找不到锚点标题 → 给 AI 明确指引
+    if err and name in ("docx_insert_section", "docx_append_paragraphs") and "找不到标题" in err:
+        path = args.get("path")
+        try:
+            if path:
+                headings = docx_grow.list_headings(path)
+                heading_names = [h.get("text") for h in headings if h.get("text")]
+                result["hint"] = (
+                    "锚点标题不存在。可能原因：(1) 你用的 afterHeading 是还没插入的章节；"
+                    "(2) 一轮里发了多个 docx_insert_section，但锚点依赖上一步的结果——"
+                    "**请务必一次只插一个章节**，等返回后再决定下一个。"
+                )
+                result["available_headings"] = heading_names[:50]
+        except Exception:  # noqa: BLE001
+            pass
+
+    # 工具执行失败日志
+    if err:
+        logger.warn("tool.result_error", tool=name, error=err[:200])
+    return result
 
 
 def tool_schemas() -> list[dict[str, Any]]:

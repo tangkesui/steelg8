@@ -8,6 +8,19 @@ import Foundation
 ///
 /// 更新策略：随时手动改。价格 / model id 变了就来这里同步。
 enum ProviderCatalog {
+    enum PresetKind: String, Equatable {
+        case cloudModel
+        case localRuntime
+        case tool
+
+        var providerKind: String {
+            switch self {
+            case .cloudModel: return "openai-compatible"
+            case .localRuntime: return "local-runtime"
+            case .tool: return "tool"
+            }
+        }
+    }
 
     struct Preset: Identifiable, Equatable {
         let id: String        // 内部 key（与 providers.json 的键对齐）
@@ -17,6 +30,30 @@ enum ProviderCatalog {
         let signupURL: String
         let blurb: String     // 一句话说明
         let defaultModels: [String]  // 建议第一次加上的 model id
+        let kind: PresetKind
+        let commandSnippet: String?
+
+        init(
+            id: String,
+            name: String,
+            baseURL: String,
+            apiKeyEnv: String,
+            signupURL: String,
+            blurb: String,
+            defaultModels: [String],
+            kind: PresetKind = .cloudModel,
+            commandSnippet: String? = nil
+        ) {
+            self.id = id
+            self.name = name
+            self.baseURL = baseURL
+            self.apiKeyEnv = apiKeyEnv
+            self.signupURL = signupURL
+            self.blurb = blurb
+            self.defaultModels = defaultModels
+            self.kind = kind
+            self.commandSnippet = commandSnippet
+        }
     }
 
     /// 默认推荐顺序：国内便宜的放前面
@@ -103,6 +140,50 @@ enum ProviderCatalog {
             defaultModels: ["Qwen/Qwen3-32B", "deepseek-ai/DeepSeek-V3"]
         ),
         .init(
+            id: "ollama",
+            name: "Ollama（本地）",
+            baseURL: "http://127.0.0.1:11434/v1",
+            apiKeyEnv: "",
+            signupURL: "",
+            blurb: "本地 OpenAI-compatible runtime；需要先启动 Ollama server。",
+            defaultModels: [],
+            kind: .localRuntime,
+            commandSnippet: "ollama serve\n# 另一个终端：ollama run llama3.1"
+        ),
+        .init(
+            id: "lmstudio",
+            name: "LM Studio（本地）",
+            baseURL: "http://127.0.0.1:1234/v1",
+            apiKeyEnv: "",
+            signupURL: "",
+            blurb: "本地 OpenAI-compatible runtime；在 LM Studio 里点 Local Server → Start。",
+            defaultModels: [],
+            kind: .localRuntime,
+            commandSnippet: "在 LM Studio GUI 里打开 Local Server，然后点击 Start。"
+        ),
+        .init(
+            id: "mlx",
+            name: "MLX / mlx-lm（本地）",
+            baseURL: "http://127.0.0.1:8080/v1",
+            apiKeyEnv: "",
+            signupURL: "",
+            blurb: "本地 MLX server；默认命令按 32GB 统一内存估算，可改成 Qwen2.5-32B 或 gemma-3-27b-it-4bit。",
+            defaultModels: [],
+            kind: .localRuntime,
+            commandSnippet: "python -m mlx_lm.server --model mlx-community/Qwen3-30B-A3B-Instruct-4bit --host 127.0.0.1 --port 8080"
+        ),
+        .init(
+            id: "llamacpp",
+            name: "llama.cpp server（本地）",
+            baseURL: "http://127.0.0.1:8081/v1",
+            apiKeyEnv: "",
+            signupURL: "",
+            blurb: "本地 llama.cpp OpenAI-compatible server；模型路径按本机 gguf 文件调整。",
+            defaultModels: [],
+            kind: .localRuntime,
+            commandSnippet: "./llama-server -m path/to/model.gguf --host 127.0.0.1 --port 8081"
+        ),
+        .init(
             id: "openrouter",
             name: "OpenRouter（国际聚合）",
             baseURL: "https://openrouter.ai/api/v1",
@@ -119,7 +200,8 @@ enum ProviderCatalog {
             apiKeyEnv: "TAVILY_API_KEY",
             signupURL: "https://tavily.com",
             blurb: "Web 搜索工具。免费 1000 次/月。填 API Key 即可，base_url 忽略。",
-            defaultModels: []
+            defaultModels: [],
+            kind: .tool
         ),
     ]
 

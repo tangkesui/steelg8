@@ -1,0 +1,55 @@
+{
+  "$schema_note": "模型目录，目标位置 ~/.steelg8/model_catalog.json，权限 0644，可进 git。selected=true 的模型才会出现在 /providers 响应和路由候选中。pricing_per_mtoken 单位：USD / 1M tokens。",
+  "version": 1,
+  "providers": {
+    "kimi": {
+      "fetched_at": null,
+      "models": [
+        {
+          "id": "kimi-k2-thinking",
+          "selected": true,
+          "pricing_per_mtoken": {"input": null, "output": null},
+          "source": "manual"
+        },
+        {
+          "id": "moonshot-v1-128k",
+          "selected": true,
+          "pricing_per_mtoken": {"input": null, "output": null},
+          "source": "manual"
+        }
+      ]
+    },
+    "deepseek": {
+      "fetched_at": null,
+      "models": [
+        {
+          "id": "deepseek-chat",
+          "selected": true,
+          "pricing_per_mtoken": {"input": null, "output": null},
+          "source": "manual"
+        },
+        {
+          "id": "deepseek-reasoner",
+          "selected": true,
+          "pricing_per_mtoken": {"input": null, "output": null},
+          "source": "manual"
+        }
+      ]
+    },
+    "bailian": {
+      "fetched_at": null,
+      "models": [
+        {
+          "id": "qwen-plus",
+          "selected": true,
+          "pricing_per_mtoken": {"input": null, "output": null},
+          "source": "manual"
+        }
+      ]
+    },
+    "openrouter": {
+      "fetched_at": null,
+      "models": []
+    }
+  }
+}

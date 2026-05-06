@@ -30,6 +30,7 @@ from typing import Any
 
 import embedding
 import extract
+import rag_store
 import vectordb
 from providers import ProviderRegistry
 
@@ -107,9 +108,19 @@ def save_card(
 
     # 知识库用"追加"而不是全量覆盖；复用 replace_chunks 每次覆盖该文件的旧条目
     # 简化：把本文件相关的 chunks 全部清掉，再写入新的
-    _replace_file_chunks(
-        proj.id, file_path.name,
-        list(zip(chunks, res.vectors)),
+    rows = [
+        _chunk_row(chunk, vec)
+        for chunk, vec in zip(chunks, res.vectors)
+    ]
+    rag_store.default_store().replace_file_chunks(
+        proj.id,
+        file_path.name,
+        rows,
+        size=file_path.stat().st_size,
+        mtime=file_path.stat().st_mtime,
+        content_hash=extract.file_hash(str(file_path)),
+        text_hash=extract.text_hash(full_text),
+        embed_model=embedding.DEFAULT_MODEL,
     )
     return {
         "path": str(file_path),
@@ -118,27 +129,25 @@ def save_card(
     }
 
 
-def _replace_file_chunks(project_id: int, rel_path: str, chunk_vec_pairs: list) -> None:
-    """只替换某个相对路径对应的 chunks，其它文件的 chunks 保留不动。"""
-    import sqlite3
-    from datetime import datetime, timezone
-    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    with vectordb._LOCK, vectordb._connect() as conn:
-        conn.execute(
-            "DELETE FROM chunks WHERE project_id = ? AND rel_path = ?",
-            (project_id, rel_path),
-        )
-        conn.executemany(
-            """INSERT INTO chunks
-               (project_id, rel_path, chunk_idx, text, embedding, tokens, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?)""",
-            [
-                (project_id, chunk.rel_path, chunk.chunk_idx, chunk.text,
-                 vectordb._vec_to_bytes(vec), chunk.approx_tokens, now)
-                for (chunk, vec) in chunk_vec_pairs
-            ],
-        )
-        conn.commit()
+def _chunk_row(chunk: extract.Chunk, vec: list[float]) -> tuple:
+    metadata = {
+        "source_path": chunk.source_path,
+        "page": chunk.page,
+        "heading": chunk.heading,
+        "paragraph_idx": chunk.paragraph_idx,
+        "start_char": chunk.start_char,
+        "end_char": chunk.end_char,
+        "content_hash": chunk.content_hash,
+        "source_type": "knowledge",
+    }
+    return (
+        chunk.rel_path,
+        chunk.chunk_idx,
+        chunk.text,
+        vec,
+        chunk.approx_tokens,
+        metadata,
+    )
 
 
 def search(registry: ProviderRegistry, query: str, top_k: int = 3) -> list[vectordb.Hit]:

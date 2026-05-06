@@ -9,7 +9,7 @@ import WebKit
 /// - 与主窗口共享同一份 scratch 数据（靠后端 HTTP 接口，不用直连）
 ///
 /// 实现：单例持有一个 NSPanel + WKWebView，panel 加载 Web/chat/index.html#scratch。
-/// 前端 chat.js 检测到 `location.hash === "#scratch"` 后会隐藏 chat 列、把侧栏撑满。
+/// 前端 chat.js 检测到 hash 里有 `scratch` 后会隐藏 chat 列、把侧栏撑满。
 @MainActor
 final class ScratchSummonWindow {
     static let shared = ScratchSummonWindow()
@@ -78,16 +78,27 @@ final class ScratchSummonWindow {
 
         let config = WKWebViewConfiguration()
         config.websiteDataStore = WKWebsiteDataStore.nonPersistent()
+        config.userContentController.addUserScript(
+            WKUserScript(
+                source: KernelConfig.webBootstrapScript,
+                injectionTime: .atDocumentStart,
+                forMainFrameOnly: true
+            )
+        )
         config.setValue(true, forKey: "allowUniversalAccessFromFileURLs")
         config.preferences.setValue(true, forKey: "allowFileAccessFromFileURLs")
+        #if DEBUG
         config.preferences.setValue(true, forKey: "developerExtrasEnabled")
+        #endif
 
         let wv = WKWebView(frame: rect, configuration: config)
         wv.setValue(false, forKey: "drawsBackground")
         wv.autoresizingMask = [.width, .height]
+        #if DEBUG
         if #available(macOS 13.3, *) {
             wv.isInspectable = true
         }
+        #endif
         p.contentView = wv
 
         // 加载 Web/chat/index.html#scratch
@@ -95,7 +106,7 @@ final class ScratchSummonWindow {
             let dir = indexURL.deletingLastPathComponent()
             // 用 WKWebView 的 loadFileRequest 会把 hash 吃掉，这里用 loadFileURL + 手写 hash
             var comps = URLComponents(url: indexURL, resolvingAgainstBaseURL: false)!
-            comps.fragment = "scratch"
+            comps.fragment = "scratch&port=\(KernelConfig.port)"
             if let u = comps.url {
                 wv.loadFileURL(u, allowingReadAccessTo: dir)
             } else {
@@ -129,19 +140,6 @@ final class ScratchSummonWindow {
     }
 
     private func locateIndex() -> URL? {
-        if let bundled = Bundle.main.url(
-            forResource: "index",
-            withExtension: "html",
-            subdirectory: "Web/chat"
-        ) {
-            return bundled
-        }
-        let dev = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()     // Chat/
-            .deletingLastPathComponent()     // steelg8/
-            .deletingLastPathComponent()     // Sources/
-            .deletingLastPathComponent()     // repo root
-            .appendingPathComponent("Web/chat/index.html")
-        return FileManager.default.fileExists(atPath: dev.path) ? dev : nil
+        KernelConfig.webIndexURL
     }
 }

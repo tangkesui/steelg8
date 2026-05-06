@@ -22,20 +22,18 @@ enum PythonRuntimeError: LocalizedError {
 
 @MainActor
 final class PythonRuntime {
-    static let defaultPort = 8765
-
-    let baseURL = URL(string: "http://127.0.0.1:\(defaultPort)")!
+    var baseURL: URL {
+        KernelConfig.baseURL
+    }
 
     var soulFileURL: URL {
-        FileManager.default.homeDirectoryForCurrentUser
-            .appending(path: ".steelg8")
-            .appending(path: "soul.md")
+        KernelConfig.soulFileURL
     }
 
     private let fileManager = FileManager.default
     private var process: Process?
-    private let stdoutPipe = Pipe()
-    private let stderrPipe = Pipe()
+    private var stdoutPipe: Pipe?
+    private var stderrPipe: Pipe?
 
     func startIfNeeded() async throws {
         if await isHealthy() {
@@ -47,9 +45,8 @@ final class PythonRuntime {
             return
         }
 
-        let scriptURL = appRootURL
-            .appending(path: "Python")
-            .appending(path: "server.py")
+        let appRootURL = KernelConfig.appRootURL
+        let scriptURL = KernelConfig.serverScriptURL
 
         guard fileManager.fileExists(atPath: scriptURL.path) else {
             throw PythonRuntimeError.serverScriptMissing(scriptURL.path)
@@ -57,35 +54,40 @@ final class PythonRuntime {
 
         // 优先用 .venv/bin/python3（装了 python-docx 等依赖）；
         // 没有就回退到系统 python3（只会跑 stdlib 的旧路径）
-        let venvPython = appRootURL
-            .appending(path: ".venv")
-            .appending(path: "bin")
-            .appending(path: "python3")
+        let venvPython = KernelConfig.venvPythonURL
         let process = Process()
         if fileManager.fileExists(atPath: venvPython.path) {
             process.executableURL = venvPython
-            process.arguments = [scriptURL.path, "--port", "\(Self.defaultPort)"]
+            process.arguments = [scriptURL.path, "--port", "\(KernelConfig.port)"]
         } else {
             process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-            process.arguments = ["python3", scriptURL.path, "--port", "\(Self.defaultPort)"]
+            process.arguments = ["python3", scriptURL.path, "--port", "\(KernelConfig.port)"]
         }
         process.currentDirectoryURL = appRootURL
         process.environment = ProcessInfo.processInfo.environment.merging([
             "PYTHONUNBUFFERED": "1",
             "STEELG8_APP_ROOT": appRootURL.path,
+            "STEELG8_PORT": "\(KernelConfig.port)",
+            "STEELG8_AUTH_TOKEN": KernelConfig.authToken,
             "STEELG8_SOUL_PATH": soulFileURL.path
         ]) { _, newValue in
             newValue
         }
+        let stdoutPipe = Pipe()
+        let stderrPipe = Pipe()
         process.standardOutput = stdoutPipe
         process.standardError = stderrPipe
 
         stdoutPipe.fileHandleForReading.readabilityHandler = makeReadabilityHandler(prefix: "python")
         stderrPipe.fileHandleForReading.readabilityHandler = makeReadabilityHandler(prefix: "python stderr")
 
-        process.terminationHandler = { process in
+        self.stdoutPipe = stdoutPipe
+        self.stderrPipe = stderrPipe
+
+        process.terminationHandler = { [weak self] process in
             Task { @MainActor in
                 NSLog("steelg8: Python runtime exited with status \(process.terminationStatus)")
+                self?.handleProcessTermination(process)
             }
         }
 
@@ -100,8 +102,7 @@ final class PythonRuntime {
     }
 
     func stop() {
-        stdoutPipe.fileHandleForReading.readabilityHandler = nil
-        stderrPipe.fileHandleForReading.readabilityHandler = nil
+        clearPipeHandlers()
 
         guard let process else { return }
         if process.isRunning {
@@ -122,9 +123,7 @@ final class PythonRuntime {
             return
         }
 
-        let soulTemplateURL = appRootURL
-            .appending(path: "prompts")
-            .appending(path: "soul.md")
+        let soulTemplateURL = KernelConfig.soulTemplateURL
 
         guard fileManager.fileExists(atPath: soulTemplateURL.path) else {
             throw PythonRuntimeError.soulTemplateMissing(soulTemplateURL.path)
@@ -134,21 +133,23 @@ final class PythonRuntime {
         try contents.write(to: soulFileURL, atomically: true, encoding: .utf8)
     }
 
-    private var appRootURL: URL {
-        URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-    }
-
     private func waitUntilHealthy() async throws {
-        for _ in 0..<20 {
+        let deadline = Date().addingTimeInterval(30)
+        var delayMilliseconds = 150
+
+        while Date() < deadline {
+            if let process, !process.isRunning {
+                throw PythonRuntimeError.failedToStart(
+                    "进程提前退出，状态码 \(process.terminationStatus)"
+                )
+            }
+
             if await isHealthy() {
                 return
             }
 
-            try await Task.sleep(for: .milliseconds(250))
+            try await Task.sleep(for: .milliseconds(delayMilliseconds))
+            delayMilliseconds = min(Int(Double(delayMilliseconds) * 1.35), 1_000)
         }
 
         throw PythonRuntimeError.healthcheckTimedOut(baseURL.appending(path: "health"))
@@ -157,26 +158,53 @@ final class PythonRuntime {
     private func isHealthy() async -> Bool {
         var request = URLRequest(url: baseURL.appending(path: "health"))
         request.timeoutInterval = 1
+        KernelConfig.authorize(&request)
 
         do {
-            let (_, response) = try await URLSession.shared.data(for: request)
+            let (data, response) = try await URLSession.shared.data(for: request)
             guard let httpResponse = response as? HTTPURLResponse else {
                 return false
             }
 
-            return httpResponse.statusCode == 200
+            guard httpResponse.statusCode == 200,
+                  let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+            else {
+                return false
+            }
+
+            return payload["ok"] as? Bool == true
+                && payload["authRequired"] as? Bool == true
+                && payload["authenticated"] as? Bool == true
         } catch {
             return false
         }
     }
 
+    private func handleProcessTermination(_ terminatedProcess: Process) {
+        if process === terminatedProcess {
+            process = nil
+        }
+        clearPipeHandlers()
+    }
+
+    private func clearPipeHandlers() {
+        stdoutPipe?.fileHandleForReading.readabilityHandler = nil
+        stderrPipe?.fileHandleForReading.readabilityHandler = nil
+        stdoutPipe = nil
+        stderrPipe = nil
+    }
+
     private func makeReadabilityHandler(prefix: String) -> @Sendable (FileHandle) -> Void {
         { handle in
             let data = handle.availableData
-            guard !data.isEmpty,
-                  let chunk = String(data: data, encoding: .utf8)?
-                    .trimmingCharacters(in: .whitespacesAndNewlines),
-                  !chunk.isEmpty
+            guard !data.isEmpty else {
+                handle.readabilityHandler = nil
+                return
+            }
+
+            guard let chunk = String(data: data, encoding: .utf8)?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+                !chunk.isEmpty
             else {
                 return
             }

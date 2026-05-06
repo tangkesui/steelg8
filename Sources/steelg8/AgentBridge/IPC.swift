@@ -29,6 +29,7 @@ final class AgentBridge {
         request.httpMethod = "POST"
         request.timeoutInterval = 15
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        KernelConfig.authorize(&request)
         request.httpBody = try JSONEncoder().encode(
             AgentChatRequest(message: message, model: model)
         )

@@ -33,13 +33,11 @@ enum ProjectPicker {
 
     /// 直接调后端打开某个路径（用于菜单命令之外的入口）。
     static func openProject(path: String) async -> Result<OpenedProject, PickError> {
-        var req = URLRequest(url: URL(string: "http://127.0.0.1:8765/project/open")!)
+        var req = URLRequest(url: KernelConfig.url(path: "project/open"))
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        KernelConfig.authorize(&req)
         req.timeoutInterval = 10
-        req.httpBody = try? JSONEncoder().encode(["path": path, "rebuild": "true"])
-        // 直接构一个匿名 dict，JSONEncoder 处理 [String: String]
-        // 注意 rebuild 前端用 bool，这里我们改成手动 JSON：
         let body: [String: Any] = ["path": path, "rebuild": true]
         req.httpBody = try? JSONSerialization.data(withJSONObject: body)
 

@@ -5,6 +5,7 @@ import SwiftUI
 @MainActor
 final class AppController: ObservableObject {
     static let shared = AppController()
+    nonisolated static let mainWindowIdentifier = NSUserInterfaceItemIdentifier("com.local.steelg8.main-window")
 
     @Published private(set) var runtimeStatus = "未启动"
     @Published private(set) var activeModel = "mock-local"
@@ -34,6 +35,10 @@ final class AppController: ObservableObject {
     private var runtimeStatusItem: NSMenuItem?
     private var lastReplyItem: NSMenuItem?
     private var terminationObserver: NSObjectProtocol?
+    private var windowCloseObserver: NSObjectProtocol?
+    private var windowKeyObserver: NSObjectProtocol?
+    private var fallbackMainWindowController: NSWindowController?
+    private var initializedMainWindows = Set<ObjectIdentifier>()
 
     func setup() {
         guard !isSetup else { return }
@@ -43,6 +48,7 @@ final class AppController: ObservableObject {
         setupHotkey()
         setupCaptureFlow()
         setupTerminationObserver()
+        setupWindowActivationObservers()
 
         Task {
             await bootPythonRuntime()
@@ -109,9 +115,10 @@ final class AppController: ObservableObject {
             guard resp == .OK, let url = panel.url else { return }
 
             // 写 preferences
-            var req = URLRequest(url: URL(string: "http://127.0.0.1:8765/preferences")!)
+            var req = URLRequest(url: KernelConfig.url(path: "preferences"))
             req.httpMethod = "POST"
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            KernelConfig.authorize(&req)
             req.httpBody = try? JSONSerialization.data(
                 withJSONObject: ["templates_dir": url.path]
             )
@@ -129,8 +136,9 @@ final class AppController: ObservableObject {
             .appending(path: "Documents")
             .appending(path: "steelg8")
             .appending(path: "templates").path
-        var req = URLRequest(url: URL(string: "http://127.0.0.1:8765/preferences")!)
+        var req = URLRequest(url: KernelConfig.url(path: "preferences"))
         req.timeoutInterval = 3
+        KernelConfig.authorize(&req)
         guard
             let (data, _) = try? await URLSession.shared.data(for: req),
             let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -183,19 +191,98 @@ final class AppController: ObservableObject {
         }
     }
 
+    @objc func restartPythonKernel() {
+        Task { [weak self] in
+            guard let self else { return }
+            pythonRuntime.stop()
+            do {
+                try await pythonRuntime.startIfNeeded()
+                await MainActor.run { [weak self] in
+                    self?.runtimeStatusItem?.title = "内核状态：已重启"
+                }
+            } catch {
+                await MainActor.run { [weak self] in
+                    self?.runtimeStatusItem?.title = "内核重启失败：\(error.localizedDescription)"
+                }
+            }
+        }
+    }
+
     @objc func showMainWindow() {
-        NSApp.activate(ignoringOtherApps: true)
-        for window in NSApp.windows where !(window is NSPanel) && window.canBecomeMain {
-            window.deminiaturize(nil)
-            window.makeKeyAndOrderFront(nil)
+        enterForegroundWindowMode()
+        ensureStatusBarVisible()
+
+        if let window = existingMainWindow() {
+            present(window)
             return
         }
-        // 关过主窗口后 NSApp.windows 里已经没有它；SwiftUI WindowGroup 响应
-        // newDocument: 会重新创建一个。
-        NSApp.sendAction(Selector(("newDocument:")), to: nil, from: nil)
+
+        if let fallbackWindow = fallbackMainWindowController?.window {
+            configureMainWindow(fallbackWindow)
+            present(fallbackWindow)
+            return
+        }
+
+        let root = ContentView()
+            .environmentObject(self)
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 1080, height: 700),
+            styleMask: [.titled, .closable, .miniaturizable, .resizable],
+            backing: .buffered,
+            defer: false
+        )
+        window.title = "steelg8"
+        window.center()
+        window.isReleasedWhenClosed = false
+        configureMainWindow(window)
+        window.contentView = NSHostingView(rootView: root)
+
+        let controller = NSWindowController(window: window)
+        fallbackMainWindowController = controller
+        controller.showWindow(nil)
+        present(window)
+    }
+
+    func configureMainWindow(_ window: NSWindow) {
+        guard !(window is NSPanel) else { return }
+        window.identifier = Self.mainWindowIdentifier
+        window.title = "steelg8"
+        window.minSize = NSSize(width: 960, height: 640)
+        window.isMovable = true
+        window.isMovableByWindowBackground = true
+
+        let windowID = ObjectIdentifier(window)
+        if !initializedMainWindows.contains(windowID) {
+            initializedMainWindows.insert(windowID)
+
+            // 一次性迁移：首次进入原生 Chat 时，清除旧 WebView 最大化帧，重新居中
+            let migKey = "steelg8.nativeChatWindowMigrated"
+            if !UserDefaults.standard.bool(forKey: migKey) {
+                UserDefaults.standard.set(true, forKey: migKey)
+                // 清除两个可能存在的旧 autosave key
+                UserDefaults.standard.removeObject(forKey: "NSWindow Frame steelg8-main-window")
+                UserDefaults.standard.removeObject(forKey: "NSWindow Frame steelg8-native-window")
+            }
+
+            // setFrameAutosaveName 必须在清除旧 key 之后调用，否则会立即恢复最大化状态。
+            // 只在窗口实例初始化时设置；SwiftUI 更新期间反复 setFrame/center 会把用户拖动打回原位。
+            window.setFrameAutosaveName("steelg8-native-window")
+
+            // 无已保存帧（含刚清除的情况）→ 仅首次设置合理尺寸再居中。
+            if UserDefaults.standard.object(forKey: "NSWindow Frame steelg8-native-window") == nil {
+                window.setFrame(NSRect(x: 0, y: 0, width: 1080, height: 700), display: false)
+                window.center()
+            }
+        }
+
+        if window.isVisible || window.isKeyWindow {
+            enterForegroundWindowMode()
+        }
     }
 
     @objc func openSettingsWindow() {
+        enterForegroundWindowMode()
+        ensureStatusBarVisible()
         NSApp.activate(ignoringOtherApps: true)
         // macOS 14+ 的标准选择器；SwiftUI Settings scene 监听此 action
         NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
@@ -228,9 +315,19 @@ final class AppController: ObservableObject {
         if let terminationObserver {
             NotificationCenter.default.removeObserver(terminationObserver)
         }
+        if let windowCloseObserver {
+            NotificationCenter.default.removeObserver(windowCloseObserver)
+        }
+        if let windowKeyObserver {
+            NotificationCenter.default.removeObserver(windowKeyObserver)
+        }
     }
 
     private func setupStatusBar() {
+        if statusItem != nil {
+            return
+        }
+
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
 
         if let button = item.button {
@@ -238,9 +335,10 @@ final class AppController: ObservableObject {
             // SF Symbols 里 "circle.grid.cross" 是十字握柄的圆框，最接近那个保险柜形象
             if let image = NSImage(systemSymbolName: "circle.grid.cross", accessibilityDescription: "steelg8") {
                 button.image = image
-            } else {
-                button.title = "steelg8"
+                button.imagePosition = .imageLeading
             }
+            button.title = " steelg8"
+            button.toolTip = "steelg8"
         }
 
         let menu = NSMenu()
@@ -308,6 +406,15 @@ final class AppController: ObservableObject {
 
         menu.addItem(.separator())
 
+        let restartKernelItem = NSMenuItem(
+            title: "重启 Python 内核",
+            action: #selector(restartPythonKernel),
+            keyEquivalent: "r"
+        )
+        restartKernelItem.target = self
+        restartKernelItem.keyEquivalentModifierMask = [.command, .shift]
+        menu.addItem(restartKernelItem)
+
         let settingsItem = NSMenuItem(
             title: "设置…",
             action: #selector(openSettingsWindow),
@@ -329,6 +436,10 @@ final class AppController: ObservableObject {
         item.menu = menu
         statusItem = item
         refreshMenuState()
+    }
+
+    func ensureStatusBarVisible() {
+        setupStatusBar()
     }
 
     private func setupHotkey() {
@@ -366,6 +477,43 @@ final class AppController: ObservableObject {
         }
     }
 
+    private func setupWindowActivationObservers() {
+        windowCloseObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.willCloseNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard let self,
+                  let window = notification.object as? NSWindow,
+                  window.identifier == Self.mainWindowIdentifier
+            else {
+                return
+            }
+
+            Task { @MainActor in
+                self.enterMenuBarOnlyModeIfNeeded()
+            }
+        }
+
+        windowKeyObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.didBecomeKeyNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard let self,
+                  let window = notification.object as? NSWindow,
+                  window.identifier == Self.mainWindowIdentifier
+            else {
+                return
+            }
+
+            Task { @MainActor in
+                self.enterForegroundWindowMode()
+                self.ensureStatusBarVisible()
+            }
+        }
+    }
+
     private func bootPythonRuntime() async {
         do {
             ensureSoulFileExists()
@@ -385,6 +533,50 @@ final class AppController: ObservableObject {
     private func refreshMenuState() {
         runtimeStatusItem?.title = "内核状态：\(runtimeStatus)"
         lastReplyItem?.title = "最近回复：\(lastAgentResponse.isEmpty ? "暂无" : shorten(lastAgentResponse))"
+    }
+
+    private func existingMainWindow() -> NSWindow? {
+        NSApp.windows.first { window in
+            window.identifier == Self.mainWindowIdentifier
+                && !(window is NSPanel)
+                && window.canBecomeMain
+        }
+    }
+
+    private func present(_ window: NSWindow) {
+        enterForegroundWindowMode()
+        ensureStatusBarVisible()
+        window.deminiaturize(nil)
+        window.orderFrontRegardless()
+        window.makeKeyAndOrderFront(nil)
+        activateApplicationFrontmost()
+
+        // LSUIElement -> regular 的转换不是完全同步的；稍后再激活一次，
+        // 避免窗口看似在前面，但菜单栏仍属于上一个 app。
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+            self.enterForegroundWindowMode()
+            window.orderFrontRegardless()
+            window.makeKeyAndOrderFront(nil)
+            self.activateApplicationFrontmost()
+        }
+    }
+
+    private func enterForegroundWindowMode() {
+        if NSApp.activationPolicy() != .regular {
+            NSApp.setActivationPolicy(.regular)
+        }
+    }
+
+    private func activateApplicationFrontmost() {
+        NSApp.unhide(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        NSRunningApplication.current.activate(options: [
+            .activateAllWindows,
+        ])
+    }
+
+    private func enterMenuBarOnlyModeIfNeeded() {
+        ensureStatusBarVisible()
     }
 
     private func shorten(_ value: String, limit: Int = 42) -> String {

@@ -33,11 +33,10 @@
 
 from __future__ import annotations
 
-import json
 from typing import Any
-from urllib import request, error
 
 from providers import ProviderRegistry
+import network
 
 
 # 粗略的 CNY → USD 汇率，用于 Kimi / DeepSeek 的 CNY 余额换算
@@ -48,9 +47,14 @@ def _get_json(url: str, *, api_key: str = "", timeout: int = 8) -> dict[str, Any
     headers = {"Content-Type": "application/json"}
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
-    req = request.Request(url, headers=headers, method="GET")
-    with request.urlopen(req, timeout=timeout) as resp:
-        return json.loads(resp.read().decode("utf-8"))
+    body = network.request_json(
+        url,
+        method="GET",
+        headers=headers,
+        timeout=timeout,
+        retries=1,
+    )
+    return body if isinstance(body, dict) else {}
 
 
 def _check_kimi(prov) -> dict[str, Any]:
@@ -72,9 +76,9 @@ def _check_kimi(prov) -> dict[str, Any]:
             f"{prov.base_url}/users/me/balance",
             api_key=prov.api_key(),
         )
-    except error.HTTPError as exc:
+    except network.NetworkError as exc:
         out["status"] = "error"
-        out["error"] = f"HTTP {exc.code}: {exc.read().decode('utf-8', 'ignore')[:200]}"
+        out["error"] = str(exc)
         return out
     except Exception as exc:  # noqa: BLE001
         out["status"] = "error"
@@ -111,9 +115,9 @@ def _check_deepseek(prov) -> dict[str, Any]:
             f"{prov.base_url}/user/balance",
             api_key=prov.api_key(),
         )
-    except error.HTTPError as exc:
+    except network.NetworkError as exc:
         out["status"] = "error"
-        out["error"] = f"HTTP {exc.code}"
+        out["error"] = str(exc)
         return out
     except Exception as exc:  # noqa: BLE001
         out["status"] = "error"
