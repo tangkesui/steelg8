@@ -2,28 +2,9 @@ import SwiftUI
 
 // MARK: - MessageView
 
-struct MessageView: View, Equatable {
+struct MessageView: View {
     let message: ChatMessage
     @Environment(\.colorScheme) private var colorScheme
-
-    static func == (lhs: MessageView, rhs: MessageView) -> Bool {
-        let l = lhs.message; let r = rhs.message
-        guard l.id == r.id,
-              l.content == r.content,
-              l.isStreaming == r.isStreaming,
-              l.isCompressed == r.isCompressed,
-              l.ragCount == r.ragCount,
-              l.toolCalls.count == r.toolCalls.count
-        else { return false }
-        for (lt, rt) in zip(l.toolCalls, r.toolCalls) {
-            if lt.id != rt.id || lt.name != rt.name || lt.isRunning != rt.isRunning
-               || (lt.result == nil) != (rt.result == nil) { return false }
-        }
-        if let lm = l.meta, let rm = r.meta {
-            if lm.completionTokens != rm.completionTokens || lm.model != rm.model { return false }
-        } else if (l.meta == nil) != (r.meta == nil) { return false }
-        return true
-    }
 
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
@@ -70,7 +51,7 @@ struct MessageView: View, Equatable {
             // 正文
             if !message.content.isEmpty || message.isStreaming {
                 VStack(alignment: .leading, spacing: 0) {
-                    MarkdownView(markdown: message.content)
+                    MarkdownView(markdown: message.content, isStreaming: message.isStreaming)
                         .textSelection(.enabled)
 
                     if message.isStreaming && message.content.isEmpty {

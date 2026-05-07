@@ -8,6 +8,7 @@ import SwiftUI
 struct NativeChatView: View {
     @StateObject private var vm = ChatViewModel()
     @State private var inputText = ""
+    @State private var composerHeight: CGFloat = ComposerView.minHeight
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
@@ -24,7 +25,6 @@ struct NativeChatView: View {
                 // 主聊天区
                 VStack(spacing: 0) {
                     ChatMessagesView(vm: vm)
-                    Divider()
                     composerBar
                 }
 
@@ -123,10 +123,10 @@ struct NativeChatView: View {
     private var composerBar: some View {
         let isEmpty = inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         return HStack(alignment: .bottom, spacing: 8) {
-            ComposerView(text: $inputText) {
+            ComposerView(text: $inputText, height: $composerHeight) {
                 sendMessage()
             }
-            .frame(minHeight: 44, maxHeight: 160)
+            .frame(height: composerHeight)
 
             if vm.isSending {
                 Button { vm.stopSending() } label: {
@@ -154,20 +154,21 @@ struct NativeChatView: View {
             }
         }
         .padding(.horizontal, 12)
-        .padding(.vertical, 10)
-        .background(
-            RoundedRectangle(cornerRadius: 8)
-                .fill(SG.surface(colorScheme))
-                .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(SG.codeBorder(colorScheme), lineWidth: 1))
-        )
-        .padding(.horizontal, 12)
         .padding(.vertical, 8)
+        .background(
+            RoundedRectangle(cornerRadius: 10)
+                .fill(SG.surface(colorScheme))
+                .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(SG.codeBorder(colorScheme), lineWidth: 1))
+        )
+        .padding(.horizontal, 48)
+        .padding(.vertical, 10)
         .background(SG.bg(colorScheme))
     }
 
     private func sendMessage() {
         let text = inputText
         inputText = ""
+        composerHeight = ComposerView.minHeight
         vm.send(text: text)
     }
 

@@ -20,6 +20,13 @@ enum MarkdownParser {
         var i = 0
 
         while i < lines.count {
+            let startIndex = i
+            defer {
+                if i == startIndex {
+                    i += 1
+                }
+            }
+
             let line = lines[i]
             let trimmed = line.trimmingCharacters(in: .whitespaces)
 
@@ -138,20 +145,22 @@ enum MarkdownParser {
     }
 
     private static func parseOLItem(_ line: String) -> (Int, String)? {
-        let pattern = #"^(\d+)\.\s(.+)"#
-        guard let range = line.range(of: pattern, options: .regularExpression),
-              range == line.startIndex..<line.endIndex else {
-            // Try simple match
-            var numStr = ""
-            var idx = line.startIndex
-            while idx < line.endIndex, line[idx].isNumber { numStr.append(line[idx]); idx = line.index(after: idx) }
-            guard !numStr.isEmpty, idx < line.endIndex, line[idx] == ".", let num = Int(numStr) else { return nil }
+        var numStr = ""
+        var idx = line.startIndex
+        while idx < line.endIndex, line[idx].isNumber {
+            numStr.append(line[idx])
             idx = line.index(after: idx)
-            guard idx < line.endIndex, line[idx] == " " else { return nil }
-            idx = line.index(after: idx)
-            return (num, String(line[idx...]))
         }
-        return nil
+        guard !numStr.isEmpty,
+              idx < line.endIndex,
+              line[idx] == ".",
+              let num = Int(numStr)
+        else { return nil }
+        idx = line.index(after: idx)
+        guard idx < line.endIndex, line[idx] == " " else { return nil }
+        idx = line.index(after: idx)
+        guard idx <= line.endIndex else { return nil }
+        return (num, String(line[idx...]))
     }
 }
 
@@ -286,22 +295,22 @@ private extension NSFont {
 
 struct MarkdownView: View {
     let markdown: String
+    var isStreaming: Bool = false
     var onCanvasOpen: ((String) -> Void)? = nil
-    @State private var parsedBlocks: [MarkdownBlock] = []
 
     var body: some View {
-        if markdown.count > 12_000 {
+        // 流式阶段用纯 Text（O(1)），避免每个 delta 触发解析和 AttributedString 构建
+        if isStreaming || markdown.count > 12_000 {
             Text(markdown)
                 .textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
         } else {
+            let parsedBlocks = MarkdownParser.parse(markdown)
             VStack(alignment: .leading, spacing: 8) {
                 ForEach(parsedBlocks.indices, id: \.self) { i in
                     blockView(parsedBlocks[i])
                 }
             }
-            .onAppear { parsedBlocks = MarkdownParser.parse(markdown) }
-            .onChange(of: markdown) { parsedBlocks = MarkdownParser.parse(markdown) }
         }
     }
 

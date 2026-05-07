@@ -324,7 +324,11 @@ final class ChatViewModel: ObservableObject {
                     sendError = error.localizedDescription
                 }
             }
+            let wasCancelled = Task.isCancelled
             finalizeAssistant(assistantId: assistantId)
+            if !wasCancelled {
+                await syncActiveConversationAfterStream()
+            }
             isSending = false
         }
     }
@@ -430,6 +434,13 @@ final class ChatViewModel: ObservableObject {
         }
     }
 
+    private func syncActiveConversationAfterStream() async {
+        guard let convId = activeConversationId else { return }
+        guard let history = try? await api.loadMessages(convId) else { return }
+        messages = displayMessages(from: history)
+        await loadConversations()
+    }
+
     // MARK: - Health polling
 
     private func startHealthPolling() {
@@ -437,7 +448,7 @@ final class ChatViewModel: ObservableObject {
             while !Task.isCancelled {
                 do {
                     let h = try await api.health()
-                    isHealthy = h.status == "ok"
+                    isHealthy = h.ok && (!h.authRequired || h.authenticated)
                     if isHealthy && !didLoadInitialState {
                         startInitialLoad()
                     }

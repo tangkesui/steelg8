@@ -13,21 +13,20 @@ struct ChatMessagesView: View {
                 LazyVStack(alignment: .leading, spacing: 22) {
                     ForEach(vm.messages) { msg in
                         MessageView(message: msg)
-                            .equatable()
                             .id(msg.id)
                     }
 
                     // 哨兵节点：始终滚动到底部
                     Color.clear.frame(height: 1).id("bottom")
                 }
-                .padding(.horizontal, 24)
+                .padding(.horizontal, 48)
                 .padding(.vertical, 20)
             }
             .background(SG.bg(colorScheme))
             .onChange(of: vm.messages.count) {
                 scrollToBottom(proxy)
             }
-            .onChange(of: vm.messages.last?.content) {
+            .onChange(of: vm.messages.last?.isStreaming) {
                 scrollToBottom(proxy)
             }
             .onAppear {

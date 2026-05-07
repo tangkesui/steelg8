@@ -227,9 +227,23 @@ print(uuid.uuid4())
 PY
 )"
 temp_providers="$tmpdir/providers.json"
+temp_secrets="$tmpdir/secrets.json"
+temp_catalog="$tmpdir/model_catalog.json"
 cat > "$temp_providers" <<'JSON'
 {
   "default_model": "",
+  "providers": {}
+}
+JSON
+cat > "$temp_secrets" <<'JSON'
+{
+  "version": 1,
+  "keys": {}
+}
+JSON
+cat > "$temp_catalog" <<'JSON'
+{
+  "version": 1,
   "providers": {}
 }
 JSON
@@ -254,6 +268,15 @@ STEELG8_PORT="$temp_port" \
 STEELG8_APP_ROOT="$ROOT" \
 STEELG8_SOUL_PATH="${HOME}/.steelg8/soul.md" \
 STEELG8_PROVIDERS_PATH="$temp_providers" \
+STEELG8_SECRETS_PATH="$temp_secrets" \
+STEELG8_CATALOG_PATH="$temp_catalog" \
+STEELG8_CONVERSATIONS_DB="$tmpdir/conversations.db" \
+STEELG8_USAGE_PATH="$tmpdir/usage.jsonl" \
+STEELG8_LOGS_DIR="$tmpdir/logs" \
+STEELG8_NOTE_PATH="$tmpdir/notepad.txt" \
+STEELG8_PREF_PATH="$tmpdir/preferences.json" \
+STEELG8_ACTIVE_PROJECT_PATH="$tmpdir/active_project.json" \
+STEELG8_VECTORS_DB="$tmpdir/vectors.db" \
 "$python_bin" Python/server.py --port "$temp_port" \
   > "$tmpdir/kernel.log" 2>&1 &
 temp_pid="$!"

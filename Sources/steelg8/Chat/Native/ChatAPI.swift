@@ -65,15 +65,9 @@ struct ProviderSummary: Decodable {
 }
 
 struct HealthStatus: Decodable {
-    let status: String
+    let ok: Bool
     let authRequired: Bool
     let authenticated: Bool
-
-    enum CodingKeys: String, CodingKey {
-        case status
-        case authRequired = "authRequired"
-        case authenticated
-    }
 }
 
 // MARK: - API 客户端

@@ -4,20 +4,27 @@ import AppKit
 // MARK: - ComposerView
 
 /// 多行输入框：⏎ 发送，Shift+⏎ 换行。
-/// 封装 NSTextView 以获得正确的高度自适应行为。
+/// 通过 @Binding height 把所需高度回传 SwiftUI，由 frame(height:) 精确控制尺寸。
 struct ComposerView: NSViewRepresentable {
     @Binding var text: String
+    @Binding var height: CGFloat
     var onSend: () -> Void
 
-    func makeCoordinator() -> Coordinator { Coordinator(text: $text, onSend: onSend) }
+    static let minHeight: CGFloat = 44   // ≈ 2 行
+    static let maxHeight: CGFloat = 130  // ≈ 6 行，超出后内部滚动
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(text: $text, height: $height, onSend: onSend)
+    }
 
     func makeNSView(context: Context) -> NSScrollView {
         let scroll = NSScrollView()
         scroll.hasVerticalScroller = true
         scroll.autohidesScrollers = true
-        scroll.borderType = .bezelBorder
+        scroll.borderType = .noBorder
+        scroll.backgroundColor = .clear
 
-        let textView = ComposerTextView()
+        let textView = NSTextView()
         textView.isEditable = true
         textView.isRichText = false
         textView.allowsUndo = true
@@ -25,8 +32,8 @@ struct ComposerView: NSViewRepresentable {
         textView.isAutomaticDashSubstitutionEnabled = false
         textView.font = .systemFont(ofSize: NSFont.systemFontSize)
         textView.textColor = .labelColor
-        textView.backgroundColor = .textBackgroundColor
-        textView.textContainerInset = NSSize(width: 4, height: 6)
+        textView.backgroundColor = .clear
+        textView.textContainerInset = NSSize(width: 2, height: 5)
         textView.isVerticallyResizable = true
         textView.isHorizontallyResizable = false
         textView.autoresizingMask = [.width]
@@ -43,6 +50,7 @@ struct ComposerView: NSViewRepresentable {
         guard let tv = nsView.documentView as? NSTextView else { return }
         if tv.string != text {
             tv.string = text
+            context.coordinator.recalcHeight(tv)
         }
     }
 
@@ -50,48 +58,42 @@ struct ComposerView: NSViewRepresentable {
 
     final class Coordinator: NSObject, NSTextViewDelegate {
         @Binding var text: String
+        @Binding var height: CGFloat
         var onSend: () -> Void
         weak var textView: NSTextView?
 
-        init(text: Binding<String>, onSend: @escaping () -> Void) {
+        init(text: Binding<String>, height: Binding<CGFloat>, onSend: @escaping () -> Void) {
             _text = text
+            _height = height
             self.onSend = onSend
         }
 
         func textDidChange(_ notification: Notification) {
             guard let tv = notification.object as? NSTextView else { return }
             text = tv.string
+            recalcHeight(tv)
+        }
+
+        func recalcHeight(_ tv: NSTextView) {
+            guard let lm = tv.layoutManager, let tc = tv.textContainer else { return }
+            lm.ensureLayout(for: tc)
+            let used = lm.usedRect(for: tc)
+            let inset = tv.textContainerInset
+            let lineH = tv.font?.boundingRectForFont.height ?? 16
+            let minH = lineH * 2 + inset.height * 2
+            let natural = used.height + inset.height * 2
+            let newH = min(ComposerView.maxHeight, max(minH, natural))
+            if abs(newH - height) > 0.5 {
+                DispatchQueue.main.async { self.height = newH }
+            }
         }
 
         func textView(_ textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
-            // ⏎ 发送；Shift+⏎ 换行
             if commandSelector == #selector(NSResponder.insertNewline(_:)) {
                 let shift = NSEvent.modifierFlags.contains(.shift)
-                if !shift {
-                    onSend()
-                    return true
-                }
+                if !shift { onSend(); return true }
             }
             return false
         }
-    }
-}
-
-// NSTextView 子类：覆盖 intrinsicContentSize 支持高度自适应
-private final class ComposerTextView: NSTextView {
-    override var intrinsicContentSize: NSSize {
-        guard let lm = layoutManager, let tc = textContainer else {
-            return super.intrinsicContentSize
-        }
-        lm.ensureLayout(for: tc)
-        let used = lm.usedRect(for: tc)
-        let inset = textContainerInset
-        let h = max(60, used.height + inset.height * 2 + 12)
-        return NSSize(width: NSView.noIntrinsicMetric, height: h)
-    }
-
-    override func didChangeText() {
-        super.didChangeText()
-        invalidateIntrinsicContentSize()
     }
 }

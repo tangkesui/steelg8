@@ -2,8 +2,8 @@ import Foundation
 import Security
 
 // API Key 存储：
-// - 生产签名（anchor apple generic）→ macOS Keychain
-// - 自签名 / 开发环境 → ~/.steelg8/secrets.json（Python 端已支持的格式）
+// - 始终同步到 ~/.steelg8/secrets.json，Python 内核只读取这个文件 / 环境变量。
+// - 生产签名（anchor apple generic）额外同步到 macOS Keychain，作为 UI 侧兼容存储。
 //
 // secrets.json 格式：{"keys": {"provider_id": "api_key_value"}}
 // Python providers.py 按此格式优先读取（api_key_secret 字段）
@@ -17,11 +17,13 @@ final class SecretsStore {
     // MARK: - 读
 
     func readAll() -> [String: String] {
+        var secrets = readSecretsJSON()
         if isProperlySignedBuild {
-            return readAllFromKeychain()
-        } else {
-            return readSecretsJSON()
+            for (providerID, value) in readAllFromKeychain() where secrets[providerID] == nil {
+                secrets[providerID] = value
+            }
         }
+        return secrets
     }
 
     func read(providerID: String) -> String {
@@ -31,13 +33,13 @@ final class SecretsStore {
     // MARK: - 写
 
     func writeAll(_ secrets: [String: String]) throws {
+        try writeSecretsJSON(secrets)
+
         if isProperlySignedBuild {
-            // 先清掉已有的，再写入
+            // Keychain 作为额外副本；Python 内核仍以 secrets.json 为准。
             for (providerID, value) in secrets {
                 try writeToKeychain(providerID: providerID, value: value)
             }
-        } else {
-            try writeSecretsJSON(secrets)
         }
     }
 
