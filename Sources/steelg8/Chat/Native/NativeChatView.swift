@@ -8,6 +8,7 @@ import SwiftUI
 struct NativeChatView: View {
     @StateObject private var vm = ChatViewModel()
     @State private var inputText = ""
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         VStack(spacing: 0) {
@@ -69,11 +70,15 @@ struct NativeChatView: View {
 
             Divider().frame(height: 16)
 
-            // 模型选择
+            // 模型选择（按 provider 分组）
             Picker("", selection: $vm.selectedModel) {
                 Text("默认模型").tag("")
-                ForEach(vm.availableModels, id: \.self) { m in
-                    Text(m).tag(m)
+                ForEach(groupedModels, id: \.provider) { group in
+                    Section(providerLabel(group.provider)) {
+                        ForEach(group.models, id: \.self) { m in
+                            Text(shortModelName(m)).tag(m)
+                        }
+                    }
                 }
             }
             .labelsHidden()
@@ -107,53 +112,96 @@ struct NativeChatView: View {
             }
         }
         .padding(.horizontal, 12)
-        .padding(.vertical, 6)
-        .background(Color(NSColor.windowBackgroundColor))
+        .frame(height: 40)
+        .background(SG.chrome(colorScheme))
     }
 
     // MARK: - Composer
 
     private var composerBar: some View {
-        HStack(alignment: .bottom, spacing: 8) {
+        let isEmpty = inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        return HStack(alignment: .bottom, spacing: 8) {
             ComposerView(text: $inputText) {
                 sendMessage()
             }
-            .frame(minHeight: 60, maxHeight: 160)
+            .frame(minHeight: 44, maxHeight: 144)
 
-            VStack(spacing: 6) {
-                if vm.isSending {
-                    Button {
-                        vm.stopSending()
-                    } label: {
-                        Image(systemName: "stop.fill")
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .tint(.red)
-                    .help("停止")
-                } else {
-                    Button {
-                        sendMessage()
-                    } label: {
-                        Image(systemName: "arrow.up.circle.fill")
-                            .font(.title2)
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                                     ? Color.secondary : Color.accentColor)
-                    .disabled(inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                    .help("发送 (⏎)")
+            if vm.isSending {
+                Button { vm.stopSending() } label: {
+                    Image(systemName: "stop.fill")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .frame(width: 28, height: 28)
+                        .background(SG.danger)
+                        .clipShape(Circle())
                 }
+                .buttonStyle(.plain)
+                .help("停止")
+            } else {
+                Button { sendMessage() } label: {
+                    Image(systemName: "arrow.up")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(isEmpty ? Color.secondary : Color.white)
+                        .frame(width: 28, height: 28)
+                        .background(isEmpty ? Color.secondary.opacity(0.15) : SG.sendBlue)
+                        .clipShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .disabled(isEmpty)
+                .help("发送 (⏎)")
             }
-            .padding(.bottom, 6)
         }
         .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(SG.surface(colorScheme))
+                .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(SG.codeBorder(colorScheme), lineWidth: 1))
+        )
+        .padding(.horizontal, 12)
         .padding(.vertical, 8)
-        .background(Color(NSColor.controlBackgroundColor))
+        .background(SG.bg(colorScheme))
     }
 
     private func sendMessage() {
         let text = inputText
         inputText = ""
         vm.send(text: text)
+    }
+
+    private struct ModelGroup { let provider: String; let models: [String] }
+
+    private var groupedModels: [ModelGroup] {
+        var result: [ModelGroup] = []
+        var currentProvider = ""
+        var currentModels: [String] = []
+        for m in vm.availableModels {
+            let provider = m.split(separator: "/", maxSplits: 1).first.map(String.init) ?? ""
+            if provider != currentProvider {
+                if !currentModels.isEmpty { result.append(ModelGroup(provider: currentProvider, models: currentModels)) }
+                currentProvider = provider
+                currentModels = []
+            }
+            currentModels.append(m)
+        }
+        if !currentModels.isEmpty { result.append(ModelGroup(provider: currentProvider, models: currentModels)) }
+        return result
+    }
+
+    private func providerLabel(_ id: String) -> String {
+        switch id {
+        case "bailian":    return "百炼"
+        case "deepseek":   return "DeepSeek"
+        case "kimi":       return "Kimi"
+        case "openrouter": return "OpenRouter"
+        default:           return id
+        }
+    }
+
+    // "provider/model" or "provider/org/model" → last path component
+    private func shortModelName(_ fullId: String) -> String {
+        let parts = fullId.split(separator: "/", maxSplits: 1).map(String.init)
+        guard parts.count == 2 else { return fullId }
+        return parts[1].split(separator: "/").last.map(String.init) ?? parts[1]
     }
 }

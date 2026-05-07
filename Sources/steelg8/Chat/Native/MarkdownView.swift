@@ -382,40 +382,47 @@ struct CodeBlockView: View {
     let language: String?
     let code: String
     @State private var copied = false
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             // 语言标签 + 复制按钮
             HStack {
                 if let lang = language, !lang.isEmpty {
-                    Text(lang).font(.caption2).foregroundStyle(.secondary)
+                    Text(lang)
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(SG.success(colorScheme))
                 }
                 Spacer()
                 Button { copyCode() } label: {
-                    Label(copied ? "已复制" : "复制", systemImage: copied ? "checkmark" : "doc.on.doc")
-                        .font(.caption2)
+                    HStack(spacing: 4) {
+                        Image(systemName: copied ? "checkmark" : "doc.on.doc")
+                        Text(copied ? "已复制" : "复制")
+                    }
+                    .font(.system(size: 11))
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(.secondary)
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 5)
-            .background(Color(nsColor: .windowBackgroundColor))
+            .padding(.horizontal, 12)
+            .frame(height: 28)
+            .background(SG.codeBg(colorScheme).opacity(0.6))
 
-            Divider()
+            Divider().opacity(0.5)
 
             // 代码内容
             ScrollView(.horizontal, showsIndicators: false) {
                 Text(AttributedString(highlightedCode()))
-                    .font(.system(.body, design: .monospaced))
+                    .font(.system(size: 13, design: .monospaced))
                     .textSelection(.enabled)
-                    .padding(10)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 10)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
-        .background(Color(nsColor: .controlBackgroundColor))
-        .clipShape(RoundedRectangle(cornerRadius: 8))
-        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color(nsColor: .separatorColor), lineWidth: 0.5))
+        .background(SG.codeBg(colorScheme))
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(SG.codeBorder(colorScheme), lineWidth: 1))
     }
 
     private func copyCode() {
@@ -429,40 +436,42 @@ struct CodeBlockView: View {
 
     private func highlightedCode() -> NSAttributedString {
         let lang = language?.lowercased() ?? ""
-        return SyntaxHighlighter.highlight(code: code, language: lang)
+        let isDark = colorScheme == .dark
+        return SyntaxHighlighter.highlight(code: code, language: lang, isDark: isDark)
     }
 }
 
 // MARK: - 基础语法高亮器
 
 enum SyntaxHighlighter {
-    static func highlight(code: String, language: String) -> NSAttributedString {
+    static func highlight(code: String, language: String, isDark: Bool = true) -> NSAttributedString {
         let result = NSMutableAttributedString(string: code)
         let fullRange = NSRange(code.startIndex..., in: code)
-        result.addAttribute(.font, value: NSFont.monospacedSystemFont(ofSize: NSFont.systemFontSize, weight: .regular), range: fullRange)
-
-        let isDark = NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-
-        let stringColor: NSColor = isDark ? NSColor(red: 0.4, green: 0.85, blue: 0.4, alpha: 1) : NSColor(red: 0.0, green: 0.5, blue: 0.0, alpha: 1)
-        let commentColor: NSColor = isDark ? .systemGray : .systemGray
-        let numberColor: NSColor = isDark ? NSColor(red: 0.4, green: 0.7, blue: 1, alpha: 1) : NSColor(red: 0.0, green: 0.3, blue: 0.8, alpha: 1)
-        let keywordColor: NSColor = isDark ? NSColor(red: 0.9, green: 0.5, blue: 0.9, alpha: 1) : NSColor(red: 0.6, green: 0.0, blue: 0.6, alpha: 1)
+        result.addAttribute(.font, value: NSFont.monospacedSystemFont(ofSize: 13, weight: .regular), range: fullRange)
 
         // 注释（必须最先处理，避免注释内容被其他规则染色）
-        applyColor(to: result, code: code, pattern: #"(//[^\n]*|#[^\n]*|/\*[\s\S]*?\*/)"#, color: commentColor)
+        applyColor(to: result, code: code, pattern: #"(//[^\n]*|#[^\n]*|/\*[\s\S]*?\*/)"#,
+                   color: SG.Syntax.comment(dark: isDark))
 
         // 字符串
-        applyColor(to: result, code: code, pattern: #"("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|`[^`]*`)"#, color: stringColor)
+        applyColor(to: result, code: code, pattern: #"("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|`[^`]*`)"#,
+                   color: SG.Syntax.string(dark: isDark))
 
         // 数字
-        applyColor(to: result, code: code, pattern: #"\b\d+(?:\.\d+)?\b"#, color: numberColor)
+        applyColor(to: result, code: code, pattern: #"\b\d+(?:\.\d+)?\b"#,
+                   color: SG.Syntax.number(dark: isDark))
 
         // 关键字
-        let keywords = keywords(for: language)
-        if !keywords.isEmpty {
-            let kw = keywords.map { NSRegularExpression.escapedPattern(for: $0) }.joined(separator: "|")
-            applyColor(to: result, code: code, pattern: #"\b(?:"# + kw + #")\b"#, color: keywordColor)
+        let kws = keywords(for: language)
+        if !kws.isEmpty {
+            let kw = kws.map { NSRegularExpression.escapedPattern(for: $0) }.joined(separator: "|")
+            applyColor(to: result, code: code, pattern: #"\b(?:"# + kw + #")\b"#,
+                       color: SG.Syntax.keyword(dark: isDark))
         }
+
+        // 函数调用
+        applyColor(to: result, code: code, pattern: #"\b([a-zA-Z_]\w*)\s*(?=\()"#,
+                   color: SG.Syntax.function_(dark: isDark))
 
         return result
     }

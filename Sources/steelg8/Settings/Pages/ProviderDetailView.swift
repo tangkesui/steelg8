@@ -260,9 +260,10 @@ struct ProviderDetailView: View {
 
     private func pricingText(_ pricing: CatalogModel.Pricing?) -> String {
         guard let pricing else { return "未知" }
-        let input = pricing.input.map { String(format: "$%.2f", $0) } ?? "未知"
-        let output = pricing.output.map { String(format: "$%.2f", $0) } ?? "未知"
-        return "\(input) / \(output) per Mtok"
+        let rate = 7.25
+        let input = pricing.input.map { String(format: "¥%.2f", $0 * rate) } ?? "未知"
+        let output = pricing.output.map { String(format: "¥%.2f", $0 * rate) } ?? "未知"
+        return "\(input) / \(output) 每百万 Token"
     }
 
     private func copyToPasteboard(_ value: String) {

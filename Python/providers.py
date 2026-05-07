@@ -120,6 +120,11 @@ class ProviderRegistry:
             if provider and provider.is_ready():
                 return provider, remainder or ""
 
+        if self.default_provider:
+            provider = self.providers.get(self.default_provider)
+            if provider and provider.owns_model(target) and provider.is_ready():
+                return provider, target
+
         for provider in self.providers.values():
             if provider.owns_model(target) and provider.is_ready():
                 canonical = target

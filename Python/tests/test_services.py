@@ -146,6 +146,16 @@ class ObservabilityServiceTests(unittest.TestCase):
         self.assertEqual(read_recent.call_args.kwargs["days"], 14)
         self.assertIsNone(read_recent.call_args.kwargs["conversation_id"])
 
+    def test_bounded_limit_uses_query_value(self):
+        self.assertEqual(
+            observability_service.bounded_limit({"limit": ["5"]}, default=100, maximum=1000),
+            5,
+        )
+        self.assertEqual(
+            observability_service.bounded_limit({"limit": ["9999"]}, default=100, maximum=1000),
+            1000,
+        )
+
 
 class DiagnosticsServiceTests(unittest.TestCase):
     def test_doctor_aggregates_checks_and_issues(self):

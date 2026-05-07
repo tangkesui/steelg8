@@ -30,14 +30,14 @@ struct ModelProfilesPage: View {
                     }
                     .width(min: 180, ideal: 320)
 
-                    TableColumn("输入 $/MTok") { row in
+                    TableColumn("输入 ¥/MTok") { row in
                         Text(row.inputText)
                             .font(.system(.body, design: .monospaced))
                             .foregroundStyle(row.inputPerMToken != nil ? .primary : .secondary)
                     }
                     .width(min: 100, ideal: 120)
 
-                    TableColumn("输出 $/MTok") { row in
+                    TableColumn("输出 ¥/MTok") { row in
                         Text(row.outputText)
                             .font(.system(.body, design: .monospaced))
                             .foregroundStyle(row.outputPerMToken != nil ? .primary : .secondary)
@@ -72,11 +72,12 @@ struct ModelProfileRow: Identifiable {
     let inputPerMToken: Double?
     let outputPerMToken: Double?
 
+    private static let usdToCny = 7.25
     var inputText: String {
-        inputPerMToken.map { String(format: "%.4f", $0) } ?? "—"
+        inputPerMToken.map { String(format: "¥%.2f", $0 * Self.usdToCny) } ?? "—"
     }
     var outputText: String {
-        outputPerMToken.map { String(format: "%.4f", $0) } ?? "—"
+        outputPerMToken.map { String(format: "¥%.2f", $0 * Self.usdToCny) } ?? "—"
     }
 }
 

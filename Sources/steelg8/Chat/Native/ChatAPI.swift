@@ -34,6 +34,34 @@ struct ProjectConversationResponse: Decodable {
 
 struct ProviderModels: Decodable {
     let models: [String]?
+    let providers: [ProviderSummary]?
+
+    var selectableModels: [String] {
+        var out: [String] = []
+        var seen = Set<String>()
+
+        for model in models ?? [] {
+            if seen.insert(model).inserted {
+                out.append(model)
+            }
+        }
+
+        for provider in providers ?? [] {
+            for model in provider.models ?? [] {
+                let canonical = "\(provider.name)/\(model)"
+                if seen.insert(canonical).inserted {
+                    out.append(canonical)
+                }
+            }
+        }
+
+        return out
+    }
+}
+
+struct ProviderSummary: Decodable {
+    let name: String
+    let models: [String]?
 }
 
 struct HealthStatus: Decodable {
@@ -128,7 +156,7 @@ struct ChatAPI {
 
     func listModels() async throws -> [String] {
         let resp: ProviderModels = try await get("providers")
-        return resp.models ?? []
+        return resp.selectableModels
     }
 
     // MARK: - Health

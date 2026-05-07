@@ -34,8 +34,7 @@ import network
 # 某些"thinking"类模型只接受固定 temperature，并且 API 会检查
 # 历史里的 assistant(带 tool_calls) 消息必须带 reasoning_content 字段。
 _FIXED_TEMPERATURE_MODELS: tuple[tuple[str, float], ...] = (
-    ("kimi-k2.5", 1.0),
-    ("kimi-k2-thinking", 1.0),
+    ("kimi-k2", 1.0),             # kimi-k2.5, kimi-k2.6, kimi-k2-thinking 等
     ("kimi-thinking", 1.0),
     ("deepseek-reasoner", 1.0),   # DS R1 也是固定
     ("o1", 1.0),

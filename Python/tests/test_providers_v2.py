@@ -194,6 +194,33 @@ class ProvidersV2Tests(unittest.TestCase):
         self.assertEqual(ds_row["displayName"], "DeepSeek")
         self.assertEqual(ds_row["kind"], "openai-compatible")
 
+    def test_resolve_prefers_default_provider_for_duplicate_model_id(self) -> None:
+        providers = self.providers
+        reg = providers.ProviderRegistry(
+            providers={
+                "kimi": providers.Provider(
+                    name="kimi",
+                    base_url="https://kimi.test/v1",
+                    api_key_secret="sk",
+                    models=["shared-model"],
+                ),
+                "deepseek": providers.Provider(
+                    name="deepseek",
+                    base_url="https://deepseek.test/v1",
+                    api_key_secret="sk",
+                    models=["shared-model"],
+                ),
+            },
+            default_model="shared-model",
+            default_provider="deepseek",
+        )
+
+        resolved = reg.resolve(None)
+        self.assertIsNotNone(resolved)
+        provider, model = resolved
+        self.assertEqual(provider.name, "deepseek")
+        self.assertEqual(model, "shared-model")
+
 
 if __name__ == "__main__":
     unittest.main()

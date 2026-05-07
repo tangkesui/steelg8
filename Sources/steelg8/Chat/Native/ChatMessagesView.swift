@@ -5,11 +5,12 @@ import SwiftUI
 /// 消息列表 + 自动滚动到最新消息。
 struct ChatMessagesView: View {
     @ObservedObject var vm: ChatViewModel
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 8) {
+                LazyVStack(alignment: .leading, spacing: 22) {
                     ForEach(vm.messages) { msg in
                         MessageView(message: msg)
                             .id(msg.id)
@@ -18,8 +19,9 @@ struct ChatMessagesView: View {
                     // 哨兵节点：始终滚动到底部
                     Color.clear.frame(height: 1).id("bottom")
                 }
-                .padding(.vertical, 12)
+                .padding(.vertical, 16)
             }
+            .background(SG.bg(colorScheme))
             .onChange(of: vm.messages.count) {
                 scrollToBottom(proxy)
             }

@@ -55,6 +55,13 @@ need() {
 
 need python3
 
+TEST_STATE_DIR="$(mktemp -d "${TMPDIR:-/tmp}/steelg8-smoke.XXXXXX")"
+export STEELG8_LOGS_DIR="${TEST_STATE_DIR}/logs"
+export STEELG8_USAGE_PATH="${TEST_STATE_DIR}/usage.jsonl"
+export STEELG8_PROVIDERS_PATH="${TEST_STATE_DIR}/providers.json"
+export STEELG8_SECRETS_PATH="${TEST_STATE_DIR}/secrets.json"
+export STEELG8_CATALOG_PATH="${TEST_STATE_DIR}/model_catalog.json"
+
 step "Python compileall"
 python3 -m compileall -q Python
 

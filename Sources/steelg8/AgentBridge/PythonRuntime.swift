@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 enum PythonRuntimeError: LocalizedError {
@@ -36,6 +37,10 @@ final class PythonRuntime {
     private var stderrPipe: Pipe?
 
     func startIfNeeded() async throws {
+        if process == nil {
+            terminateStaleKernelProcesses()
+        }
+
         if await isHealthy() {
             return
         }
@@ -107,6 +112,11 @@ final class PythonRuntime {
         guard let process else { return }
         if process.isRunning {
             process.terminate()
+            waitForExit(process, timeout: 2)
+            if process.isRunning {
+                Darwin.kill(process.processIdentifier, SIGKILL)
+                waitForExit(process, timeout: 1)
+            }
         }
         self.process = nil
     }
@@ -185,6 +195,66 @@ final class PythonRuntime {
             process = nil
         }
         clearPipeHandlers()
+    }
+
+    private func terminateStaleKernelProcesses() {
+        let scriptPath = KernelConfig.serverScriptURL.path
+        let currentPID = ProcessInfo.processInfo.processIdentifier
+        let pgrep = Process()
+        let pipe = Pipe()
+        pgrep.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
+        pgrep.arguments = ["-f", scriptPath]
+        pgrep.standardOutput = pipe
+
+        do {
+            try pgrep.run()
+        } catch {
+            return
+        }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        pgrep.waitUntilExit()
+        guard let output = String(data: data, encoding: .utf8) else { return }
+
+        for rawPID in output.split(separator: "\n") {
+            guard let pid = pid_t(rawPID) else {
+                continue
+            }
+
+            let ppid = parentPID(of: pid)
+            guard pid != currentPID, ppid != currentPID
+            else {
+                continue
+            }
+
+            NSLog("steelg8: terminating stale Python kernel pid \(pid)")
+            Darwin.kill(pid, SIGTERM)
+        }
+    }
+
+    private func parentPID(of pid: pid_t) -> pid_t? {
+        let ps = Process()
+        let pipe = Pipe()
+        ps.executableURL = URL(fileURLWithPath: "/bin/ps")
+        ps.arguments = ["-o", "ppid=", "-p", "\(pid)"]
+        ps.standardOutput = pipe
+
+        do {
+            try ps.run()
+        } catch {
+            return nil
+        }
+
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        ps.waitUntilExit()
+        guard let output = String(data: data, encoding: .utf8) else { return nil }
+        return pid_t(output.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
+    private func waitForExit(_ process: Process, timeout: TimeInterval) {
+        let deadline = Date().addingTimeInterval(timeout)
+        while process.isRunning && Date() < deadline {
+            RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.05))
+        }
     }
 
     private func clearPipeHandlers() {

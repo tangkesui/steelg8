@@ -4,6 +4,7 @@ import SwiftUI
 
 struct MessageView: View {
     let message: ChatMessage
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
@@ -27,7 +28,7 @@ struct MessageView: View {
                 .textSelection(.enabled)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
-                .background(Color.accentColor.opacity(0.15))
+                .background(SG.userBubble(colorScheme))
                 .clipShape(RoundedRectangle(cornerRadius: 12))
                 .frame(maxWidth: 520, alignment: .trailing)
 
@@ -82,25 +83,26 @@ struct MessageView: View {
         HStack(spacing: 8) {
             if !meta.model.isEmpty {
                 Text(meta.model)
-                    .font(.caption2)
+                    .font(.system(size: 10.5))
                     .foregroundStyle(.tertiary)
             }
             if meta.promptTokens > 0 || meta.completionTokens > 0 {
                 Text("↑\(meta.promptTokens) ↓\(meta.completionTokens)")
-                    .font(.caption2.monospacedDigit())
+                    .font(.system(size: 10.5).monospacedDigit())
                     .foregroundStyle(.tertiary)
             }
             if meta.costUsd > 0 {
-                Text(String(format: "$%.4f", meta.costUsd))
-                    .font(.caption2.monospacedDigit())
+                Text(String(format: "¥%.4f", meta.costUsd * 7.25))
+                    .font(.system(size: 10.5).monospacedDigit())
                     .foregroundStyle(.tertiary)
             }
             if message.ragCount > 0 {
                 Text("RAG \(message.ragCount)")
-                    .font(.caption2)
+                    .font(.system(size: 10.5))
                     .foregroundStyle(.tertiary)
             }
         }
+        .padding(.top, 10)
     }
 }
 
@@ -108,6 +110,7 @@ struct MessageView: View {
 
 private struct ToolCallRow: View {
     let tc: ToolCallInfo
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         HStack(spacing: 6) {
@@ -115,23 +118,23 @@ private struct ToolCallRow: View {
                 ProgressView().scaleEffect(0.5).frame(width: 14, height: 14)
             } else {
                 Image(systemName: "checkmark.circle.fill")
-                    .font(.caption)
-                    .foregroundStyle(.green)
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(SG.success(colorScheme))
             }
             Text(tc.name)
-                .font(.caption)
+                .font(.system(size: 11.5))
                 .foregroundStyle(.secondary)
             if let result = tc.result,
                let text = result["text"] as? String, !text.isEmpty {
                 Text("→ \(text.prefix(80))")
-                    .font(.caption)
+                    .font(.system(size: 11.5))
                     .foregroundStyle(.tertiary)
                     .lineLimit(1)
             }
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 4)
-        .background(Color.secondary.opacity(0.08))
+        .background(SG.pillBg(colorScheme))
         .clipShape(RoundedRectangle(cornerRadius: 6))
     }
 }

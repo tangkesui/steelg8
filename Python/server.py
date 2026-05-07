@@ -206,7 +206,9 @@ class SteelG8Handler(BaseHTTPRequestHandler):
         self.respond(200, observability_service.usage_summary())
 
     def _get_usage_recent(self) -> None:
-        self.respond(200, observability_service.recent_usage(limit=100))
+        query = http_request.query_params(self.path)
+        limit = observability_service.bounded_limit(query, default=100, maximum=1000)
+        self.respond(200, observability_service.recent_usage(limit=limit))
 
     def _get_scratch_note(self) -> None:
         self.respond(200, library_service.scratch_note())

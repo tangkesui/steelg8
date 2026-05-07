@@ -14,17 +14,22 @@ struct GeneralPage: View {
         Form {
             Section {
                 Picker("默认模型", selection: $viewModel.defaultModel) {
-                    if viewModel.allModels.isEmpty {
-                        Text("— 尚无可选模型 —").tag("")
+                    Text("自动（由路由决定）").tag("")
+                    if viewModel.groupedModels.isEmpty {
+                        Text("— 尚无可选模型，请先在「供应商」页配置 —").tag("__none__")
                     } else {
-                        ForEach(viewModel.allModels, id: \.self) { model in
-                            Text(model).tag(model)
+                        ForEach(viewModel.groupedModels, id: \.provider) { group in
+                            Section(group.label) {
+                                ForEach(group.models, id: \.self) { model in
+                                    Text(model).tag(model)
+                                }
+                            }
                         }
                     }
                 }
                 .pickerStyle(.menu)
             } footer: {
-                Text("路由不命中显式 model 时使用。")
+                Text("路由不命中显式 model 时使用。留空则按供应商顺序自动选第一个就绪的模型。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -102,11 +107,17 @@ struct GeneralPage: View {
     }
 }
 
+struct ModelGroup {
+    let provider: String
+    let label: String
+    let models: [String]
+}
+
 @MainActor
 final class GeneralPageViewModel: ObservableObject {
 
     @Published var defaultModel: String = ""
-    @Published var allModels: [String] = []
+    @Published var groupedModels: [ModelGroup] = []
     @Published var compressionTriggerRatio: Double = AppPreferencesStore.defaultCompressionTriggerRatio
     @Published var logLevel: AppLogLevel = AppPreferencesStore.defaultLogLevel
     @Published var statusMessage: String?
@@ -128,7 +139,16 @@ final class GeneralPageViewModel: ObservableObject {
     func reload() {
         do {
             let loaded = try ProviderConfigStore.shared.load()
-            allModels = loaded.entries.flatMap(\.models).filter { !$0.isEmpty }
+            groupedModels = loaded.entries
+                .filter { $0.kind != "tool" && !$0.models.isEmpty }
+                .map { entry in
+                    ModelGroup(
+                        provider: entry.name,
+                        label: providerLabel(entry.name),
+                        models: entry.models.filter { !$0.isEmpty }
+                    )
+                }
+                .filter { !$0.models.isEmpty }
             defaultModel = loaded.defaultModel
             let prefs = AppPreferencesStore.shared.loadOrDefaults()
             compressionTriggerRatio = prefs.compressionTriggerRatio
@@ -141,9 +161,20 @@ final class GeneralPageViewModel: ObservableObject {
         }
     }
 
+    private func providerLabel(_ id: String) -> String {
+        switch id {
+        case "bailian":    return "百炼（阿里云）"
+        case "deepseek":   return "DeepSeek"
+        case "kimi":       return "Kimi"
+        case "openrouter": return "OpenRouter"
+        default:           return id
+        }
+    }
+
     func save() {
         isSaving = true
         let trimmed = defaultModel.trimmingCharacters(in: .whitespacesAndNewlines)
+        let allModels = groupedModels.flatMap(\.models)
         if !trimmed.isEmpty && !allModels.contains(trimmed) {
             statusMessage = "默认模型不在已配置的 provider 模型列表里：\(trimmed)"
             statusIsError = true

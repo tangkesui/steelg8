@@ -232,6 +232,8 @@ def read_recent(
                 rec = json.loads(raw)
             except json.JSONDecodeError:
                 continue
+            if _is_test_artifact(rec):
+                continue
             if conversation_id is not None and rec.get("conversation_id") != conversation_id:
                 continue
             if min_level and LEVEL_ORDER.get(rec.get("level", ""), 0) < min_level:
@@ -242,6 +244,14 @@ def read_recent(
             if len(out) >= limit:
                 return out
     return out
+
+
+def _is_test_artifact(rec: dict[str, Any]) -> bool:
+    text = "\n".join(
+        str(rec.get(key, ""))
+        for key in ("traceback", "error_msg", "error", "event", "model")
+    )
+    return "/Python/tests/" in text or "Python/tests/" in text
 
 
 def _timedelta_days(n: int):
