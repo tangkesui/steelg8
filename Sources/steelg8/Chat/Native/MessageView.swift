@@ -2,9 +2,28 @@ import SwiftUI
 
 // MARK: - MessageView
 
-struct MessageView: View {
+struct MessageView: View, Equatable {
     let message: ChatMessage
     @Environment(\.colorScheme) private var colorScheme
+
+    static func == (lhs: MessageView, rhs: MessageView) -> Bool {
+        let l = lhs.message; let r = rhs.message
+        guard l.id == r.id,
+              l.content == r.content,
+              l.isStreaming == r.isStreaming,
+              l.isCompressed == r.isCompressed,
+              l.ragCount == r.ragCount,
+              l.toolCalls.count == r.toolCalls.count
+        else { return false }
+        for (lt, rt) in zip(l.toolCalls, r.toolCalls) {
+            if lt.id != rt.id || lt.name != rt.name || lt.isRunning != rt.isRunning
+               || (lt.result == nil) != (rt.result == nil) { return false }
+        }
+        if let lm = l.meta, let rm = r.meta {
+            if lm.completionTokens != rm.completionTokens || lm.model != rm.model { return false }
+        } else if (l.meta == nil) != (r.meta == nil) { return false }
+        return true
+    }
 
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
@@ -16,7 +35,6 @@ struct MessageView: View {
                 Spacer(minLength: 60)
             }
         }
-        .padding(.horizontal, 12)
         .padding(.vertical, 4)
     }
 
@@ -112,10 +130,27 @@ private struct ToolCallRow: View {
     let tc: ToolCallInfo
     @Environment(\.colorScheme) private var colorScheme
 
+    private var isError: Bool {
+        guard let r = tc.result else { return false }
+        if let flag = r["is_error"] as? Bool, flag { return true }
+        return r["error"] is String
+    }
+
+    private var resultDetail: String? {
+        guard let r = tc.result else { return nil }
+        if let err = r["error"] as? String { return err }
+        if let text = r["text"] as? String, !text.isEmpty { return text }
+        return nil
+    }
+
     var body: some View {
         HStack(spacing: 6) {
             if tc.isRunning {
                 ProgressView().scaleEffect(0.5).frame(width: 14, height: 14)
+            } else if isError {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(SG.danger)
             } else {
                 Image(systemName: "checkmark.circle.fill")
                     .font(.system(size: 11.5))
@@ -123,10 +158,9 @@ private struct ToolCallRow: View {
             }
             Text(tc.name)
                 .font(.system(size: 11.5))
-                .foregroundStyle(.secondary)
-            if let result = tc.result,
-               let text = result["text"] as? String, !text.isEmpty {
-                Text("→ \(text.prefix(80))")
+                .foregroundStyle(isError ? .primary : .secondary)
+            if let detail = resultDetail {
+                Text("→ \(detail.prefix(80))")
                     .font(.system(size: 11.5))
                     .foregroundStyle(.tertiary)
                     .lineLimit(1)
@@ -134,7 +168,7 @@ private struct ToolCallRow: View {
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 4)
-        .background(SG.pillBg(colorScheme))
+        .background(isError ? SG.danger.opacity(0.08) : SG.pillBg(colorScheme))
         .clipShape(RoundedRectangle(cornerRadius: 6))
     }
 }

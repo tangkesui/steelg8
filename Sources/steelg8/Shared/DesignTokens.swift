@@ -54,7 +54,13 @@ enum SG {
         cs == .dark ? Color(hex: "#1a1c22") : Color(hex: "#f0f0ed")
     }
     static func codeBorder(_ cs: ColorScheme) -> Color {
-        cs == .dark ? Color.white.opacity(0.08) : Color.black.opacity(0.08)
+        cs == .dark ? Color.white.opacity(0.06) : Color.black.opacity(0.08)
+    }
+    static func sidebarHover(_ cs: ColorScheme) -> Color {
+        cs == .dark ? Color.white.opacity(0.04) : Color.black.opacity(0.04)
+    }
+    static func sidebarSelected(_ cs: ColorScheme) -> Color {
+        cs == .dark ? Color(hex: "#e0e2ea").opacity(0.10) : Color(hex: "#2b2f3a").opacity(0.10)
     }
     static func pillBg(_ cs: ColorScheme) -> Color {
         cs == .dark ? Color.white.opacity(0.06) : Color.black.opacity(0.05)

@@ -78,15 +78,20 @@ struct ChatSidebarView: View {
     private var scratchSection: some View {
         VStack(alignment: .leading, spacing: 4) {
             Text("便签")
-                .font(.caption)
+                .font(.system(size: 10.5, weight: .semibold))
+                .tracking(0.5)
                 .foregroundStyle(.secondary)
-                .padding(.horizontal, 8)
-                .padding(.top, 6)
+                .padding(.horizontal, 10)
+                .padding(.top, 8)
 
             TextEditor(text: $vm.scratchText)
                 .font(.system(size: 11.5, design: .monospaced))
-                .frame(minHeight: 120, idealHeight: 160, maxHeight: 220)
-                .padding(4)
+                .scrollContentBackground(.hidden)
+                .background(SG.sidebarHover(colorScheme))
+                .clipShape(RoundedRectangle(cornerRadius: 5))
+                .frame(minHeight: 90, idealHeight: 130, maxHeight: 200)
+                .padding(.horizontal, 8)
+                .padding(.bottom, 4)
                 .onChange(of: vm.scratchText) { vm.scheduleScratchSave() }
         }
         .padding(.bottom, 6)
@@ -117,18 +122,18 @@ private struct ProjectRow: View {
 
     var body: some View {
         HStack(spacing: 6) {
-            Image(systemName: proj.active ? "folder.fill" : "folder")
+            Image(systemName: "folder")
                 .font(.system(size: 11))
-                .foregroundStyle(proj.active ? Color.accentColor : Color.secondary)
+                .foregroundStyle(Color.secondary)
             Text(proj.name)
-                .font(.system(size: 12))
+                .font(.system(size: 12.5, weight: proj.active ? .medium : .regular))
                 .lineLimit(1)
             Spacer()
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 5)
         .frame(minHeight: 26)
-        .background(proj.active ? Color.accentColor.opacity(0.12) : Color.clear)
+        .background(proj.active ? SG.sidebarSelected(colorScheme) : Color.clear)
         .clipShape(RoundedRectangle(cornerRadius: 4))
         .contentShape(Rectangle())
         .onTapGesture {
@@ -153,14 +158,15 @@ private struct ConversationRow: View {
     let onSelect: () -> Void
     let onRename: () -> Void
     let onDelete: () -> Void
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         HStack(spacing: 6) {
             Image(systemName: "bubble.left")
                 .font(.system(size: 10))
-                .foregroundStyle(isActive ? Color.accentColor : Color.secondary)
+                .foregroundStyle(Color.secondary)
             Text(conv.title ?? "新对话")
-                .font(.system(size: 12))
+                .font(.system(size: 12.5, weight: isActive ? .medium : .regular))
                 .lineLimit(1)
                 .foregroundStyle(isActive ? .primary : .secondary)
             Spacer()
@@ -168,7 +174,7 @@ private struct ConversationRow: View {
         .padding(.horizontal, 8)
         .padding(.vertical, 5)
         .frame(minHeight: 26)
-        .background(isActive ? Color.accentColor.opacity(0.12) : Color.clear)
+        .background(isActive ? SG.sidebarSelected(colorScheme) : Color.clear)
         .clipShape(RoundedRectangle(cornerRadius: 4))
         .contentShape(Rectangle())
         .onTapGesture(perform: onSelect)

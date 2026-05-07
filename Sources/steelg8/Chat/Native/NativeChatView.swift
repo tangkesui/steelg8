@@ -88,11 +88,13 @@ struct NativeChatView: View {
                 .frame(maxWidth: .infinity, minHeight: 28, maxHeight: 28)
                 .contentShape(Rectangle())
 
-            // 健康状态指示
-            Circle()
-                .fill(vm.isHealthy ? Color.green : Color.red)
-                .frame(width: 8, height: 8)
-                .help(vm.isHealthy ? "内核运行正常" : "内核未就绪")
+            // 健康状态指示（8pt dot + glow ring）
+            ZStack {
+                let dotColor = vm.isHealthy ? SG.success(colorScheme) : SG.danger
+                Circle().fill(dotColor.opacity(0.20)).frame(width: 14, height: 14)
+                Circle().fill(dotColor).frame(width: 8, height: 8)
+            }
+            .help(vm.isHealthy ? "内核运行正常" : "内核未就绪")
 
             // Canvas 开关
             if vm.canvasVisible {
@@ -124,7 +126,7 @@ struct NativeChatView: View {
             ComposerView(text: $inputText) {
                 sendMessage()
             }
-            .frame(minHeight: 44, maxHeight: 144)
+            .frame(minHeight: 44, maxHeight: 160)
 
             if vm.isSending {
                 Button { vm.stopSending() } label: {

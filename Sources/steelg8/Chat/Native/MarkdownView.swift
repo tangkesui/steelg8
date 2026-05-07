@@ -287,6 +287,7 @@ private extension NSFont {
 struct MarkdownView: View {
     let markdown: String
     var onCanvasOpen: ((String) -> Void)? = nil
+    @State private var parsedBlocks: [MarkdownBlock] = []
 
     var body: some View {
         if markdown.count > 12_000 {
@@ -294,12 +295,13 @@ struct MarkdownView: View {
                 .textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
         } else {
-            let blocks = MarkdownParser.parse(markdown)
             VStack(alignment: .leading, spacing: 8) {
-                ForEach(blocks.indices, id: \.self) { i in
-                    blockView(blocks[i])
+                ForEach(parsedBlocks.indices, id: \.self) { i in
+                    blockView(parsedBlocks[i])
                 }
             }
+            .onAppear { parsedBlocks = MarkdownParser.parse(markdown) }
+            .onChange(of: markdown) { parsedBlocks = MarkdownParser.parse(markdown) }
         }
     }
 
