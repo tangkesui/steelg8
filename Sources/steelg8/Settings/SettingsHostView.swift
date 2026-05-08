@@ -1,69 +1,94 @@
 import AppKit
 import SwiftUI
 
-/// 设置窗口的容器壳：左侧 NavigationSplitView 分组 + 右侧子页。Phase 12.2 引入。
 struct SettingsHostView: View {
-
     @State private var selection: SettingsSection = .general
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
-        ZStack(alignment: .top) {
-            NavigationSplitView {
-                sidebar
-                    .navigationSplitViewColumnWidth(min: 180, ideal: 200, max: 220)
-            } detail: {
-                detail(for: selection)
-                    .frame(minWidth: 680, minHeight: 420)
-            }
-
-            WindowDragArea()
-                .frame(height: 36)
-                .frame(maxWidth: .infinity)
-                .allowsHitTesting(true)
+        HStack(spacing: 0) {
+            sidebar
+            Divider()
+            detail(for: selection)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .frame(minWidth: 900, minHeight: 520)
-        .background(
-            WindowConfigurator { window in
-                window.isMovable = true
-                window.isMovableByWindowBackground = true
-                window.minSize = NSSize(width: 900, height: 520)
-                window.title = "steelg8 Settings"
-            }
-        )
+        .frame(minWidth: 860, minHeight: 500)
     }
+
+    // MARK: - 自定义 Sidebar
 
     private var sidebar: some View {
-        List(selection: $selection) {
-            ForEach(SettingsSection.Group.allCases) { group in
-                Section(group.title) {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(SettingsSection.Group.allCases) { group in
+                    sectionHeader(group.title)
                     ForEach(group.sections) { section in
-                        Label(section.title, systemImage: section.systemImage)
-                            .tag(section)
+                        sidebarRow(section)
                     }
+                    Spacer().frame(height: 8)
                 }
             }
+            .padding(.vertical, 8)
         }
-        .listStyle(.sidebar)
+        .frame(width: 190)
+        .background(SG.sidebarBg(colorScheme))
     }
+
+    private func sectionHeader(_ title: String) -> some View {
+        Text(title)
+            .font(.system(size: 10.5, weight: .semibold))
+            .tracking(0.5)
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 12)
+            .padding(.top, 8)
+            .padding(.bottom, 2)
+    }
+
+    private func sidebarRow(_ section: SettingsSection) -> some View {
+        let isSelected = selection == section
+        return Button { selection = section } label: {
+            HStack(spacing: 6) {
+                Image(systemName: section.systemImage)
+                    .font(.system(size: 11.5))
+                    .frame(width: 16)
+                    .foregroundStyle(isSelected ? .primary : Color.secondary)
+                Text(section.title)
+                    .font(.system(size: 12.5, weight: isSelected ? .medium : .regular))
+                    .foregroundStyle(isSelected ? .primary : .primary)
+                    .lineLimit(1)
+                Spacer()
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .frame(minHeight: 26)
+            .background(
+                isSelected ? SG.sidebarSelected(colorScheme) : Color.clear
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 5))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .padding(.horizontal, 6)
+    }
+
+    // MARK: - Detail
 
     @ViewBuilder
     private func detail(for section: SettingsSection) -> some View {
         switch section {
-        case .general:        GeneralPage()
-        case .topbar:         TopbarPage()
-        case .soul:           SoulPage()
-        case .userMemory:     UserMemoryPage()
-        case .providers:      ProvidersPage()
-        case .modelProfiles:  ModelProfilesPage()
-        case .runtimeCost:    CostPage()
-        case .runtimeHealth:  HealthPage()
-        case .runtimeIndex:   IndexPage()
-        case .runtimeRAG:     RAGPage()
-        case .runtimeLog:     LogPage()
+        case .general:         GeneralPage()
+        case .topbar:          TopbarPage()
+        case .soul:            SoulPage()
+        case .userMemory:      UserMemoryPage()
+        case .providersAdmin:  ProvidersPage()
+        case .modelAdmin:      ModelManagementPage()
+        case .router:          RouterPage()
+        case .rag:             RAGManagementPage()
+        case .runtimeCost:     CostPage()
+        case .runtimeHealth:   HealthPage()
+        case .runtimeIndex:    IndexPage()
+        case .runtimeRAG:      RAGPage()
+        case .runtimeLog:      LogPage()
         }
     }
-}
-
-#Preview {
-    SettingsHostView()
 }

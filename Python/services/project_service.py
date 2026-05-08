@@ -41,9 +41,10 @@ def open_project(body: Any, registry: ProviderRegistry) -> dict[str, Any]:
     path = str(body.get("path", "")).strip()
     if not path:
         raise ServiceError(400, {"error": "path is required"})
+    name = str(body.get("name", "")).strip() or None
     rebuild = bool(body.get("rebuild", True))
     try:
-        proj = project_mod.open_project(path, registry, rebuild=rebuild)
+        proj = project_mod.open_project(path, registry, name=name, rebuild=rebuild)
     except ValueError as exc:
         raise ServiceError(400, {"error": str(exc)}) from exc
     except Exception as exc:  # noqa: BLE001

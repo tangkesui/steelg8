@@ -680,11 +680,11 @@ def _mock_content(user_message: str, decision: RoutingDecision, *, error: str | 
             lines.append("**原因**：上游瞬时过载或限流（内部已自动重试 2 次）。")
             lines.append("**建议**：")
             lines.append("- 等 10-30 秒再发，过载通常秒级恢复")
-            lines.append("- 或从右上角「模型」下拉换另一家（Qwen/DeepSeek/Claude 都能接）")
+            lines.append("- 或在顶栏切换模型（Qwen/DeepSeek/Claude 都能接）")
         elif "401" in error or "403" in error or "认证" in error or "api key" in err_lower:
             lines.append("")
             lines.append("**原因**：API Key 无效或无权限。")
-            lines.append("**建议**：打开 设置 → 重新填 key，或点 ↻ 刷 provider 列表")
+            lines.append("**建议**：打开 设置 → Provider 页面，重新填写 API Key")
         elif "404" in error:
             lines.append("")
             lines.append("**原因**：模型不存在或 base_url 错了。")
@@ -704,6 +704,6 @@ def _mock_content(user_message: str, decision: RoutingDecision, *, error: str | 
         "",
         f"路由：{decision.layer} · {decision.reason}",
         "",
-        "请在右上角 ↻ 刷新，或打开 设置 配一个 provider。",
+        "请打开 设置 → Provider 页面，配置至少一个 provider。",
     ]
     return "\n".join(lines)

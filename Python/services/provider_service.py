@@ -67,12 +67,15 @@ def sync_models(registry: ProviderRegistry, name: str) -> ServiceResponse:
 
 
 def catalog_refresh(registry: ProviderRegistry, name: str) -> ServiceResponse:
-    """Phase 12.4：拉上游 /models → 注入定价 → 写 ~/.steelg8/model_catalog.json。
+    """拉上游 /models → 注入定价 + created_at → 写 ~/.steelg8/model_catalog.json。
 
-    定价来源：
-    - OpenRouter：列表响应里 `pricing.prompt` / `pricing.completion`（USD/token）→ ×1e6 得 per Mtok
-    - 其它 provider：`pricing.lookup(model_id, provider_id)` 兜底表
-    - 兜底表也命中不到 → input/output 写 None，前端展示"未知"
+    定价来源（pricing_source 字段标记）：
+    - OpenRouter 列表响应里 `pricing.prompt` / `pricing.completion`（USD/token） → verified
+    - bailian/kimi/deepseek 走 pricing_scraper 抓官方文档 → verified（best-effort）
+    - 其它走 `pricing.py` 静态表 → fallback
+    - 都没命中 → input/output 写 None + fallback；UI 显示 "—"
+
+    verified 优先级保护：catalog 里旧记录已是 `pricing_source: verified` 时，刷新不覆盖。
 
     保留语义：之前用户手工 unselected 的模型，刷新后仍然 selected=False（即便上游仍含该 id）。
     上游已下架的模型直接从 catalog 移除。
@@ -88,12 +91,54 @@ def catalog_refresh(registry: ProviderRegistry, name: str) -> ServiceResponse:
     if not new_ids:
         raise ServiceError(500, {"error": "上游返回的模型缺少 id 字段"})
 
-    pricing_by_id: dict[str, dict[str, float | None]] = {}
+    # 主动 seed 已知的 embedding / rerank 模型（bailian 这种 /v1/models 不暴露
+    # embedding/rerank 的上游需要这一步，否则 RAG 管理页永远列不出候选）。
+    import known_capabilities
+
+    seen_ids = set(new_ids)
+    seeded_ids: list[str] = []
+    for mid in (
+        list(known_capabilities.EMBEDDING_MODELS.get(name, []))
+        + list(known_capabilities.RERANK_MODELS.get(name, []))
+    ):
+        if mid not in seen_ids:
+            seen_ids.add(mid)
+            seeded_ids.append(mid)
+    new_ids.extend(seeded_ids)
+
+    # 1) 上游响应自带 pricing（OpenRouter）→ verified
+    # 2) 没自带的 → _resolve_pricing 走 pricing.lookup() 静态表 → 命中 verified / 没命中 fallback
+    pricing_by_id: dict[str, tuple[dict[str, float | None], str]] = {}
+    created_by_id: dict[str, int | None] = {}
     for rec in records:
         mid = rec.get("id")
         if not isinstance(mid, str):
             continue
         pricing_by_id[mid] = _resolve_pricing(rec, mid, name)
+        created = rec.get("created")
+        if isinstance(created, (int, float)):
+            created_by_id[mid] = int(created)
+        else:
+            created_by_id[mid] = None
+
+    # seeded ids（known_capabilities 兜底进来的，上游 records 里没有）
+    # 也走 _resolve_pricing —— 走的是空 record 路径，最终命中 pricing.lookup 静态表
+    for mid in seeded_ids:
+        pricing_by_id[mid] = _resolve_pricing({}, mid, name)
+        created_by_id[mid] = None
+
+    # 3) 官方文档爬虫 (best-effort)：bailian / kimi / deepseek 等
+    try:
+        from services import pricing_scraper
+
+        scraped = pricing_scraper.scrape_pricing(name)
+    except Exception:  # noqa: BLE001
+        scraped = {}
+    for mid, scraped_price in (scraped or {}).items():
+        if mid in pricing_by_id:
+            pricing_by_id[mid] = (scraped_price, "verified")
+        elif mid in new_ids:
+            pricing_by_id[mid] = (scraped_price, "verified")
 
     old_unselected = {
         m["id"]
@@ -113,15 +158,44 @@ def catalog_refresh(registry: ProviderRegistry, name: str) -> ServiceResponse:
                 m["selected"] = False
         model_catalog.save(doc)
 
-    for mid, pr in pricing_by_id.items():
-        if pr.get("input") is not None or pr.get("output") is not None:
-            model_catalog.record_pricing(name, mid, pr)
+    for mid, (pr, src) in pricing_by_id.items():
+        # 写 pricing；verified 优先级保护：旧已是 verified → 跳过 fallback 写入
+        respect = src == "fallback"
+        if pr.get("input") is not None or pr.get("output") is not None or src == "fallback":
+            model_catalog.record_pricing(
+                name, mid, pr, pricing_source=src, respect_verified=respect
+            )
+
+    for mid, created in created_by_id.items():
+        model_catalog.record_created_at(name, mid, created)
+
+    # capability auto-tag：依据 known_capabilities 表给已知 embedding / rerank
+    # 模型自动打标。规则：仅当当前 capabilities == ["chat"] 时打（用户手填过的
+    # 不覆盖；用户在「模型管理」页右键 toggle 出非 chat 标签会落入跳过分支）。
+    existing_caps = {
+        m["id"]: list(m.get("capabilities") or ["chat"])
+        for m in model_catalog.all_models(name)
+        if isinstance(m.get("id"), str)
+    }
+    for mid in new_ids:
+        inferred = known_capabilities.capabilities_for(name, mid)
+        if inferred == ["chat"]:
+            continue
+        if existing_caps.get(mid, ["chat"]) == ["chat"]:
+            model_catalog.set_capabilities(name, mid, inferred)
 
     fetched_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     model_catalog.mark_fetched(name, fetched_at)
 
     selected_ids = [mid for mid in new_ids if mid not in old_unselected]
     registry.update_models(name, selected_ids)
+
+    # 重读 catalog 拿最新 capabilities（被 set_capabilities 覆写过）
+    final_caps = {
+        m["id"]: m.get("capabilities") or ["chat"]
+        for m in model_catalog.all_models(name)
+        if isinstance(m.get("id"), str)
+    }
 
     return ServiceResponse(
         status=200,
@@ -135,8 +209,13 @@ def catalog_refresh(registry: ProviderRegistry, name: str) -> ServiceResponse:
                     "id": mid,
                     "selected": mid not in old_unselected,
                     "pricing_per_mtoken": pricing_by_id.get(
-                        mid, {"input": None, "output": None}
-                    ),
+                        mid, ({"input": None, "output": None}, "fallback")
+                    )[0],
+                    "pricing_source": pricing_by_id.get(
+                        mid, ({"input": None, "output": None}, "fallback")
+                    )[1],
+                    "created_at": created_by_id.get(mid),
+                    "capabilities": final_caps.get(mid, ["chat"]),
                 }
                 for mid in new_ids
             ],
@@ -183,6 +262,235 @@ def update_catalog_selection(name: str, payload: dict[str, Any]) -> ServiceRespo
 
     model_catalog.set_selected_models(name, model_ids, source="manual")
     return read_catalog(name)
+
+
+def update_catalog_capability(
+    name: str, payload: dict[str, Any]
+) -> ServiceResponse:
+    """模型管理页右键 toggle capability tag。
+
+    body: {"model_id": "...", "capability": "embedding|rerank|chat|...", "enabled": bool}
+    """
+    import model_catalog
+
+    mid = payload.get("model_id")
+    cap = payload.get("capability")
+    enabled = payload.get("enabled")
+    if not isinstance(mid, str) or not mid.strip():
+        raise ServiceError(400, {"error": "model_id is required"})
+    if not isinstance(cap, str) or not cap.strip():
+        raise ServiceError(400, {"error": "capability is required"})
+    if not isinstance(enabled, bool):
+        raise ServiceError(400, {"error": "enabled must be bool"})
+
+    ok = model_catalog.toggle_capability(name, mid.strip(), cap.strip(), enabled)
+    if not ok:
+        raise ServiceError(404, {"error": f"model {mid} not in {name} catalog"})
+    return read_catalog(name)
+
+
+def resolve_model(
+    registry: ProviderRegistry, payload: dict[str, Any]
+) -> ServiceResponse:
+    """模型管理页"实际通过 X 调用"的可视化端点。
+
+    body: {"model": "..."}；返 {provider, model, layer, reason} —— 走和 router 一样的解析。
+    """
+    import router
+
+    raw = payload.get("model") if isinstance(payload, dict) else None
+    if not isinstance(raw, str):
+        raw = ""
+    # 用 preview 不写 _LAST_DECISION，避免覆盖 RouterPage 的最近命中
+    decision = router.preview("", registry, explicit_model=raw or None)
+    return ServiceResponse(
+        status=200,
+        payload={
+            "ok": True,
+            "provider": decision.provider,
+            "model": decision.model,
+            "layer": decision.layer,
+            "reason": decision.reason,
+        },
+    )
+
+
+def update_catalog_pricing(
+    name: str, payload: dict[str, Any]
+) -> ServiceResponse:
+    """模型管理页"双击编辑价格"接口。
+
+    body: {"model_id": "...", "input": float|null, "output": float|null, "reset": bool}
+    - reset=True：把 pricing_source 改回 fallback、清空数字（"恢复 fallback"按钮）
+    - 否则：写入 pricing_source=verified
+    """
+    import model_catalog
+
+    mid = payload.get("model_id")
+    if not isinstance(mid, str) or not mid.strip():
+        raise ServiceError(400, {"error": "model_id is required"})
+    mid = mid.strip()
+
+    if payload.get("reset") is True:
+        ok = model_catalog.reset_pricing_to_fallback(name, mid)
+        if not ok:
+            raise ServiceError(404, {"error": f"model {mid} not in catalog"})
+        return read_catalog(name)
+
+    pricing_dict = {
+        "input": _coerce_optional_float(payload.get("input")),
+        "output": _coerce_optional_float(payload.get("output")),
+    }
+    model_catalog.record_pricing(name, mid, pricing_dict, pricing_source="verified")
+    return read_catalog(name)
+
+
+def update_default_provider(
+    registry: ProviderRegistry, payload: dict[str, Any]
+) -> ServiceResponse:
+    """路由设置页改默认供应商。写 providers.json 的 default_provider 字段。"""
+    raw = payload.get("default_provider")
+    if not isinstance(raw, str):
+        raise ServiceError(400, {"error": "default_provider must be a string"})
+    name = raw.strip()
+    if name and name not in registry.providers:
+        raise ServiceError(400, {"error": f"unknown provider: {name}"})
+    _patch_providers_doc({"default_provider": name})
+    registry.default_provider = name
+    return ServiceResponse(status=200, payload={"ok": True, "default_provider": name})
+
+
+def update_provider_order(
+    registry: ProviderRegistry, payload: dict[str, Any]
+) -> ServiceResponse:
+    """路由设置页改 fallback 顺序。重排 providers.json providers[] 数组。
+
+    body: {"order": ["bailian", "deepseek", ...]}
+    未列出的 provider 追加到末尾，保持原顺序。
+    """
+    raw_order = payload.get("order")
+    if not isinstance(raw_order, list):
+        raise ServiceError(400, {"error": "order must be a list"})
+    requested: list[str] = []
+    seen: set[str] = set()
+    for raw in raw_order:
+        if not isinstance(raw, str):
+            continue
+        pid = raw.strip()
+        if pid and pid not in seen and pid in registry.providers:
+            seen.add(pid)
+            requested.append(pid)
+
+    doc = _read_providers_doc()
+    providers_list = doc.get("providers")
+    if not isinstance(providers_list, list):
+        raise ServiceError(500, {"error": "providers.json schema unexpected"})
+
+    by_id: dict[str, dict[str, Any]] = {}
+    for entry in providers_list:
+        if isinstance(entry, dict):
+            pid = str(entry.get("id") or "").strip()
+            if pid:
+                by_id[pid] = entry
+
+    new_list: list[dict[str, Any]] = []
+    for pid in requested:
+        if pid in by_id:
+            new_list.append(by_id.pop(pid))
+    # 未列出的保留原顺序追加
+    for entry in providers_list:
+        if not isinstance(entry, dict):
+            continue
+        pid = str(entry.get("id") or "").strip()
+        if pid and pid in by_id:
+            new_list.append(by_id.pop(pid))
+
+    doc["providers"] = new_list
+    _write_providers_doc(doc)
+
+    # registry.providers 是 dict，重建顺序
+    new_dict = {}
+    for entry in new_list:
+        pid = str(entry.get("id") or "").strip()
+        if pid in registry.providers:
+            new_dict[pid] = registry.providers[pid]
+    registry.providers = new_dict
+    return ServiceResponse(
+        status=200, payload={"ok": True, "order": list(new_dict.keys())}
+    )
+
+
+def router_state() -> ServiceResponse:
+    """GET /router/state：返回最近一次路由命中。路由设置页可视化用。"""
+    import router
+
+    last = router.last_decision()
+    return ServiceResponse(
+        status=200,
+        payload={"ok": True, "last": last.to_dict() if last else None},
+    )
+
+
+def _coerce_optional_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        return None
+    return f if f > 0 else None
+
+
+def _read_providers_doc() -> dict[str, Any]:
+    import json
+    import os
+    from pathlib import Path
+
+    path = Path(os.environ.get(
+        "STEELG8_PROVIDERS_PATH", Path.home() / ".steelg8" / "providers.json"
+    )).expanduser()
+    if not path.exists():
+        raise ServiceError(404, {"error": "providers.json not found"})
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ServiceError(500, {"error": f"providers.json read failed: {exc}"}) from exc
+
+
+def _patch_providers_doc(patch: dict[str, Any]) -> None:
+    doc = _read_providers_doc()
+    doc.update(patch)
+    _write_providers_doc(doc)
+
+
+def _write_providers_doc(doc: dict[str, Any]) -> None:
+    import json
+    import os
+    import tempfile
+    from pathlib import Path
+
+    path = Path(os.environ.get(
+        "STEELG8_PROVIDERS_PATH", Path.home() / ".steelg8" / "providers.json"
+    )).expanduser()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    body = json.dumps(doc, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    fd, tmp = tempfile.mkstemp(
+        prefix=path.name + ".", suffix=".tmp", dir=str(path.parent)
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(body)
+        try:
+            os.chmod(tmp, 0o644)
+        except OSError:
+            pass
+        os.replace(tmp, path)
+    except Exception:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
 def wallet_summary(registry: ProviderRegistry) -> dict[str, Any]:
@@ -263,9 +571,15 @@ def _fetch_upstream_records(prov: Provider) -> list[dict[str, Any]]:
 
 
 def _resolve_pricing(
-    record: dict[str, Any], model_id: str, provider_name: str
-) -> dict[str, float | None]:
-    """优先从上游响应解析 (OpenRouter 列表自带 pricing)；否则查 pricing.py 兜底表。"""
+    record: dict[str, Any], model_id: str, provider_name: str  # noqa: ARG001
+) -> tuple[dict[str, float | None], str]:
+    """返回 ({input, output}, source)。
+
+    2026-05-08 起按用户偏好：catalog 不再写静态表 fallback 估值。
+    - 上游响应自带 pricing → verified（OpenRouter 路径）
+    - 其它情况 → (null, "fallback")，UI 显示 "—"
+    后续由 pricing_scraper（LiteLLM 等可信源）+ 手填升级到 verified。
+    """
     pr = record.get("pricing")
     if isinstance(pr, dict):
         try:
@@ -276,18 +590,25 @@ def _resolve_pricing(
         except (TypeError, ValueError):
             prompt = completion = None
         if prompt is not None or completion is not None:
-            return {
-                "input": prompt * 1_000_000 if prompt is not None else None,
-                "output": completion * 1_000_000 if completion is not None else None,
-            }
+            return (
+                {
+                    "input": prompt * 1_000_000 if prompt is not None else None,
+                    "output": completion * 1_000_000 if completion is not None else None,
+                },
+                "verified",
+            )
 
+    # 上游 record.pricing 没拿到 → 查静态 pricing 表（embedding/rerank/官网定价）
+    # 命中即 verified（来源是官网定价文档），未命中再 fallback null
     import pricing
+    static_price = pricing.lookup(model_id, provider_name)
+    if static_price is not None:
+        return (
+            {"input": static_price.input_per_1m, "output": static_price.output_per_1m},
+            "verified",
+        )
 
-    p = pricing.lookup(model_id, provider_name)
-    return {
-        "input": p.input_per_1m if p.input_per_1m > 0 else None,
-        "output": p.output_per_1m if p.output_per_1m > 0 else None,
-    }
+    return ({"input": None, "output": None}, "fallback")
 
 
 def _extract_model_ids(body: Any) -> list[str]:

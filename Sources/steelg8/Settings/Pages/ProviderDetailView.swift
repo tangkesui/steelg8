@@ -11,38 +11,36 @@ enum ProviderDetailField {
 struct ProviderDetailView: View {
     let entry: ProviderEntry
     let catalogModels: [CatalogModel]
-    let selectedIDs: Set<String>
     @Binding var newModelText: String
     let isRefreshing: Bool
     let isSaving: Bool
     let statusMessage: String?
     let statusIsError: Bool
     let onSetField: (ProviderDetailField, String) -> Void
-    let onToggleModel: (String, Bool) -> Void
     let onAddManualModel: () -> Void
     let onRefreshCatalog: () -> Void
-    let onApplyRecommended: () -> Void
     let onUseEnv: () -> Void
     let onDelete: () -> Void
     let onSave: () -> Void
     let onReload: () -> Void
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
-                header
-                basicsSection
-                if !isToolProvider {
-                    modelsSection
+        VStack(spacing: 0) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    header
+                    basicsSection
+                    if !isToolProvider {
+                        modelsSection
+                    }
+                    if let preset = ProviderCatalog.preset(by: entry.name),
+                       preset.kind == .localRuntime {
+                        localRuntimeSection(preset)
+                    }
                 }
-                if let preset = ProviderCatalog.preset(by: entry.name),
-                   preset.kind == .localRuntime {
-                    localRuntimeSection(preset)
-                }
+                .padding(20)
             }
-            .padding(20)
-        }
-        .safeAreaInset(edge: .bottom) {
+            Divider()
             footerBar
         }
     }
@@ -104,39 +102,34 @@ struct ProviderDetailView: View {
     }
 
     private var modelsSection: some View {
-        GroupBox("模型") {
+        GroupBox("模型 catalog（共 \(catalogModels.count) 个）") {
             VStack(alignment: .leading, spacing: 10) {
                 HStack {
                     Button {
                         onRefreshCatalog()
                     } label: {
                         if isRefreshing {
-                            ProgressView()
-                                .controlSize(.small)
+                            ProgressView().controlSize(.small)
                         } else {
-                            Label("刷新 catalog", systemImage: "arrow.clockwise")
+                            Label("刷新模型清单", systemImage: "arrow.clockwise")
                         }
                     }
                     .disabled(isRefreshing)
-
-                    Button("应用推荐清单", action: onApplyRecommended)
-                        .disabled(RecommendedModelsClient.forProvider(entry.name).isEmpty)
-
                     Spacer()
                 }
 
                 if catalogModels.isEmpty {
-                    Text("暂无模型。可以刷新 catalog，或手动添加一个 model id。")
+                    Text("还没有 catalog——点击上方「刷新模型清单」从上游 /v1/models 拉取。")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, minHeight: 60, alignment: .center)
+                        .padding(.vertical, 12)
+                        .background(.quaternary.opacity(0.3), in: RoundedRectangle(cornerRadius: 6))
                 } else {
-                    VStack(spacing: 0) {
-                        ForEach(catalogModels) { model in
-                            modelRow(model)
-                            Divider()
-                        }
-                    }
+                    catalogList
                 }
+
+                Divider()
 
                 HStack {
                     TextField("手动输入 model id", text: $newModelText)
@@ -144,7 +137,7 @@ struct ProviderDetailView: View {
                     Button {
                         onAddManualModel()
                     } label: {
-                        Label("添加", systemImage: "plus.circle")
+                        Label("添加到 catalog", systemImage: "plus.circle")
                     }
                 }
             }
@@ -152,25 +145,31 @@ struct ProviderDetailView: View {
         }
     }
 
-    private func modelRow(_ model: CatalogModel) -> some View {
-        HStack(spacing: 10) {
-            Toggle(
-                "",
-                isOn: Binding(
-                    get: { selectedIDs.contains(model.id) },
-                    set: { onToggleModel(model.id, $0) }
-                )
-            )
-            .labelsHidden()
-            Text(model.id)
-                .font(.body.monospaced())
-                .lineLimit(1)
-            Spacer()
-            Text(pricingText(model.pricingPerMToken))
-                .font(.caption)
-                .foregroundStyle(.secondary)
+    private var catalogList: some View {
+        LazyVStack(alignment: .leading, spacing: 4) {
+            ForEach(catalogModels.sorted(by: { $0.id < $1.id }), id: \.id) { model in
+                HStack(spacing: 8) {
+                    Image(systemName: model.selected ? "checkmark.circle.fill" : "circle")
+                        .font(.system(size: 11))
+                        .foregroundStyle(model.selected ? .green : .secondary.opacity(0.5))
+                        .help(model.selected ? "已勾选（在「模型管理」中）" : "未勾选")
+                    Text(model.id)
+                        .font(.system(size: 12, design: .monospaced))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Spacer(minLength: 8)
+                    if let pricing = model.pricingPerMToken,
+                       let inputPrice = pricing.input {
+                        Text(String(format: "$%.3f / Mtok", inputPrice))
+                            .font(.system(size: 10.5, design: .monospaced))
+                            .foregroundStyle(.tertiary)
+                    }
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3)
+                .background(.quaternary.opacity(0.15), in: RoundedRectangle(cornerRadius: 4))
+            }
         }
-        .padding(.vertical, 7)
     }
 
     private func localRuntimeSection(_ preset: ProviderCatalog.Preset) -> some View {
@@ -212,7 +211,7 @@ struct ProviderDetailView: View {
                     .foregroundStyle(statusIsError ? .red : .secondary)
                     .lineLimit(2)
             }
-            Button("还原", action: onReload)
+            Button("默认", action: onReload)
             Button("保存并热加载", action: onSave)
                 .buttonStyle(.borderedProminent)
                 .disabled(isSaving)
@@ -256,14 +255,6 @@ struct ProviderDetailView: View {
         case "tool": return "工具 Provider"
         default: return "云端模型 Provider"
         }
-    }
-
-    private func pricingText(_ pricing: CatalogModel.Pricing?) -> String {
-        guard let pricing else { return "未知" }
-        let rate = 7.25
-        let input = pricing.input.map { String(format: "¥%.2f", $0 * rate) } ?? "未知"
-        let output = pricing.output.map { String(format: "¥%.2f", $0 * rate) } ?? "未知"
-        return "\(input) / \(output) 每百万 Token"
     }
 
     private func copyToPasteboard(_ value: String) {

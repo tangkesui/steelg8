@@ -7,10 +7,26 @@ struct RAGPage: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            configBanner
             queryBar
             Divider()
             resultArea
         }
+    }
+
+    private var configBanner: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "info.circle")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+            Text("本页是 RAG 检索调试 / 回放。要改 embedding / rerank / 策略 / backend 配置请去「模型 → RAG 管理」。")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+            Spacer()
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .background(Color.secondary.opacity(0.06))
     }
 
     private var queryBar: some View {

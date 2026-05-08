@@ -66,6 +66,7 @@ final class ChatViewModel: ObservableObject {
     // 聊天区数据
     @Published var messages: [ChatMessage] = []
     @Published var selectedModel: String = ""
+    @Published var configuredDefaultModel: String = ""
 
     // 发送状态
     @Published var isSending: Bool = false
@@ -84,6 +85,7 @@ final class ChatViewModel: ObservableObject {
     private var streamTask: Task<Void, Never>?
     private var healthTask: Task<Void, Never>?
     private var scratchSaveTask: Task<Void, Never>?
+    private var configChangeObserver: NSObjectProtocol?
     private var didLoadInitialState = false
     private let restoredMessageDisplayLimit = 12
     private let restoredMessageCharacterLimit = 4_000
@@ -95,6 +97,15 @@ final class ChatViewModel: ObservableObject {
         if healthTask == nil {
             startHealthPolling()
         }
+        if configChangeObserver == nil {
+            configChangeObserver = NotificationCenter.default.addObserver(
+                forName: .providerConfigDidChange,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                Task { [weak self] in await self?.loadModels() }
+            }
+        }
     }
 
     func onDisappear() {
@@ -103,6 +114,10 @@ final class ChatViewModel: ObservableObject {
         initialLoadTask?.cancel()
         initialLoadTask = nil
         streamTask?.cancel()
+        if let obs = configChangeObserver {
+            NotificationCenter.default.removeObserver(obs)
+            configChangeObserver = nil
+        }
     }
 
     private func startInitialLoad() {
@@ -144,6 +159,11 @@ final class ChatViewModel: ObservableObject {
         }
         if let models = try? await api.listModels() {
             availableModels = models
+            let defaultModel = (try? ProviderConfigStore.shared.load())?.defaultModel ?? ""
+            configuredDefaultModel = defaultModel
+            if selectedModel.isEmpty, let match = matchAvailable(defaultModel, in: models) {
+                selectedModel = match
+            }
             loadedAnything = true
         }
 
@@ -290,6 +310,28 @@ final class ChatViewModel: ObservableObject {
 
     func loadModels() async {
         do { availableModels = try await api.listModels() } catch {}
+        let defaultModel = (try? ProviderConfigStore.shared.load())?.defaultModel ?? ""
+        configuredDefaultModel = defaultModel
+        // 三种情形都需要把 selectedModel 同步到默认值：
+        // 1) 用户从未手选过（selectedModel 为空）
+        // 2) 之前选的模型在新配置下已经下线
+        // 3) selectedModel 等于旧默认值，本就跟默认走
+        let needFallback = selectedModel.isEmpty || !availableModels.contains(selectedModel)
+        if needFallback, let match = matchAvailable(defaultModel, in: availableModels) {
+            selectedModel = match
+        }
+    }
+
+    /// providers.json 里的 default_model 是 raw id（例如 "deepseek-v4-flash"），
+    /// 而 availableModels 里 Swift 端给加了 "<provider>/" 前缀做去重（例如
+    /// "bailian/deepseek-v4-flash"）。匹配时优先精确，其次按 "/<id>" 后缀，
+    /// 找到首个就返回。
+    private func matchAvailable(_ raw: String, in models: [String]) -> String? {
+        let id = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !id.isEmpty else { return nil }
+        if models.contains(id) { return id }
+        let suffix = "/" + id
+        return models.first { $0.hasSuffix(suffix) }
     }
 
     // MARK: - Sending
@@ -437,7 +479,18 @@ final class ChatViewModel: ObservableObject {
     private func syncActiveConversationAfterStream() async {
         guard let convId = activeConversationId else { return }
         guard let history = try? await api.loadMessages(convId) else { return }
-        messages = displayMessages(from: history)
+
+        // DB 只存 role/content/compressed，不存 meta/toolCalls/ragCount。
+        // 重建后把最后一条 assistant 的运行期字段套回去，避免输出完成后底部 footer 消失。
+        let lastAssistant = messages.last { $0.role == .assistant }
+        var rebuilt = displayMessages(from: history)
+        if let last = lastAssistant,
+           let idx = rebuilt.lastIndex(where: { $0.role == .assistant }) {
+            rebuilt[idx].meta = last.meta
+            rebuilt[idx].toolCalls = last.toolCalls
+            rebuilt[idx].ragCount = last.ragCount
+        }
+        messages = rebuilt
         await loadConversations()
     }
 

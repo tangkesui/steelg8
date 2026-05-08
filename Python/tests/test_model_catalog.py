@@ -35,7 +35,7 @@ class ModelCatalogTests(unittest.TestCase):
 
     def test_load_when_missing_returns_empty_doc(self) -> None:
         doc = self.mc.load()
-        self.assertEqual(doc, {"version": 1, "providers": {}})
+        self.assertEqual(doc, {"version": 2, "providers": {}})
 
     def test_selected_models_filters_unselected(self) -> None:
         self._catalog_path.write_text(
@@ -106,7 +106,46 @@ class ModelCatalogTests(unittest.TestCase):
         self.mc.set_selected_models("kimi", ["k2"])
         self.mc.record_pricing("kimi", "k2", {"input": 0.3, "output": 0.6})
         pr = self.mc.model_pricing("kimi")
-        self.assertEqual(pr["k2"], {"input": 0.3, "output": 0.6})
+        # 新 schema：pricing dict 多一个 source 字段（fallback 默认）
+        self.assertEqual(pr["k2"]["input"], 0.3)
+        self.assertEqual(pr["k2"]["output"], 0.6)
+        self.assertEqual(pr["k2"]["source"], "fallback")
+
+    def test_record_pricing_verified_protected_from_fallback_overwrite(self) -> None:
+        self.mc.set_selected_models("kimi", ["k2"])
+        # 先用 verified 写入
+        self.mc.record_pricing(
+            "kimi", "k2", {"input": 0.5, "output": 1.0}, pricing_source="verified"
+        )
+        # fallback 尝试覆盖应被保护
+        ok = self.mc.record_pricing(
+            "kimi",
+            "k2",
+            {"input": 0.1, "output": 0.2},
+            pricing_source="fallback",
+            respect_verified=True,
+        )
+        self.assertFalse(ok)
+        pr = self.mc.model_pricing("kimi")
+        self.assertEqual(pr["k2"]["input"], 0.5)
+        self.assertEqual(pr["k2"]["source"], "verified")
+
+    def test_reset_pricing_to_fallback(self) -> None:
+        self.mc.set_selected_models("kimi", ["k2"])
+        self.mc.record_pricing(
+            "kimi", "k2", {"input": 0.5, "output": 1.0}, pricing_source="verified"
+        )
+        self.mc.reset_pricing_to_fallback("kimi", "k2")
+        pr = self.mc.model_pricing("kimi")
+        self.assertIsNone(pr["k2"]["input"])
+        self.assertIsNone(pr["k2"]["output"])
+        self.assertEqual(pr["k2"]["source"], "fallback")
+
+    def test_record_created_at(self) -> None:
+        self.mc.set_selected_models("kimi", ["k2"])
+        self.mc.record_created_at("kimi", "k2", 1717000000)
+        models = {m["id"]: m for m in self.mc.all_models("kimi")}
+        self.assertEqual(models["k2"]["created_at"], 1717000000)
 
     def test_record_pricing_appends_when_missing(self) -> None:
         self.mc.record_pricing("new-prov", "new-model", {"input": 1.0, "output": 2.0})
@@ -123,7 +162,7 @@ class ModelCatalogTests(unittest.TestCase):
     def test_corrupted_file_falls_back_to_empty(self) -> None:
         self._catalog_path.write_text("{not json", encoding="utf-8")
         doc = self.mc.load()
-        self.assertEqual(doc, {"version": 1, "providers": {}})
+        self.assertEqual(doc, {"version": 2, "providers": {}})
 
 
 if __name__ == "__main__":

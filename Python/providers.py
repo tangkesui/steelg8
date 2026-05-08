@@ -59,7 +59,12 @@ class Provider:
     api_key_inline: str = ""    # 弃用：来自 providers.json 中的 api_key 字段
     api_key_secret: str = ""    # 来自 secrets.json
     kind: str = "openai-compatible"
+    # `models` 历史名义=可见模型集（catalog selected:true）。2026-05-08 起拆分：
+    # - all_models = catalog 全量库存（不论 selected），路由 fallback 池用
+    # - models = visible_models 别名，UI topbar / 默认模型 picker 用
+    # 旧调用方读 `provider.models` 行为不变（仍是可见集）；要全量请走 all_models。
     models: list[str] = field(default_factory=list)
+    all_models: list[str] = field(default_factory=list)
 
     def api_key(self) -> str:
         if self.api_key_secret:
@@ -97,7 +102,7 @@ class Provider:
     def owns_model(self, model: str) -> bool:
         if not model:
             return False
-        if model in self.models:
+        if model in self.models or model in self.all_models:
             return True
         return model.startswith(f"{self.name}/") or model.startswith(f"{self.name}-")
 
@@ -135,21 +140,34 @@ class ProviderRegistry:
         return None
 
     def first_ready(self) -> tuple[Provider, str] | None:
+        """路由层 3 fallback：按 providers 数组顺序找第一个就绪 provider。
+
+        模型选取走 catalog 全量库存（all_models），不再受 topbar 可见集影响——
+        用户在模型管理页 unselect 一个模型只控 topbar 显示，不该改 fallback。
+        既没 all_models 也没 default_model 时返空字符串（mock-local 兜底）。
+        """
         for provider in self.providers.values():
             if provider.is_ready():
-                fallback_model = provider.models[0] if provider.models else ""
+                fallback_model = (
+                    provider.all_models[0] if provider.all_models else ""
+                )
                 return provider, fallback_model or self.default_model
         return None
 
     def update_models(self, name: str, models: list[str]) -> bool:
-        """更新 provider 的 selected models；同步落到 model_catalog.json。"""
+        """更新 provider 的 visible models；同步落到 model_catalog.json。
+
+        2026-05-08：source 改成 "manual" 避免误删 catalog 里 unselected 的全量库存。
+        catalog_refresh 已先用 source="upstream" 写过完整库存，再走这里只是
+        把 selected 子集精确化，不该再清扫库存。
+        """
         prov = self.providers.get(name)
         if not prov:
             return False
         prov.models = [str(m) for m in models if m]
         try:
             import model_catalog
-            model_catalog.set_selected_models(name, prov.models, source="upstream")
+            model_catalog.set_selected_models(name, prov.models, source="manual")
         except OSError:
             return False
         return True
@@ -158,10 +176,16 @@ class ProviderRegistry:
         try:
             import model_catalog
             pricing_lookup: dict[str, dict[str, dict[str, Any]]] = {}
+            created_lookup: dict[str, dict[str, int | None]] = {}
             for provider in self.providers.values():
                 pricing_lookup[provider.name] = model_catalog.model_pricing(provider.name)
+                created_lookup[provider.name] = {
+                    m["id"]: m.get("created_at")
+                    for m in model_catalog.all_models(provider.name)
+                }
         except Exception:  # noqa: BLE001
             pricing_lookup = {}
+            created_lookup = {}
 
         return [
             {
@@ -172,9 +196,13 @@ class ProviderRegistry:
                 "ready": provider.is_ready(),
                 "apiKeyEnv": provider.api_key_env,
                 "apiKeySource": provider.api_key_source(),
+                # `models` 历史名义是"selected/visible"集（topbar / picker 用）
                 "models": list(provider.models),
                 "selected_models": list(provider.models),
+                # 新增：catalog 全量库存集（路由 fallback 池 / 模型管理表用）
+                "all_models": list(provider.all_models),
                 "pricing": pricing_lookup.get(provider.name, {}),
+                "created_at": created_lookup.get(provider.name, {}),
             }
             for provider in self.providers.values()
         ]
@@ -370,16 +398,18 @@ def _build_registry_from_v2(
         if not base_url:
             continue
 
-        models: list[str] = []
+        visible_models: list[str] = []
+        all_models: list[str] = []
         prov_cat = catalog_providers.get(pid) or {}
         for m in prov_cat.get("models") or []:
             if not isinstance(m, dict):
                 continue
-            if m.get("selected") is False:
-                continue
             mid = m.get("id")
-            if isinstance(mid, str) and mid:
-                models.append(mid)
+            if not isinstance(mid, str) or not mid:
+                continue
+            all_models.append(mid)
+            if m.get("selected") is not False:
+                visible_models.append(mid)
 
         providers[pid] = Provider(
             name=pid,
@@ -389,12 +419,23 @@ def _build_registry_from_v2(
             api_key_inline=str(entry.get("api_key", "") or "").strip(),
             api_key_secret=secrets.get(pid, ""),
             kind=str(entry.get("kind") or "openai-compatible"),
-            models=models,
+            models=visible_models,
+            all_models=all_models,
         )
+
+    # 兜底：default_model 已在 providers.json 配好但 catalog 里 selected:false（孤儿状态），
+    # 此时 provider.models（visible 集）会过滤掉它，导致 UI topbar 显示"选择模型"。
+    # 自动把 default_model 加到其所属 provider 的 visible 集里（all_models 自然已经包含）。
+    default_model = str(doc.get("default_model", "")).strip()
+    if default_model and not any(default_model in p.models for p in providers.values()):
+        for pid, prov in providers.items():
+            if default_model in prov.all_models:
+                prov.models.append(default_model)
+                break
 
     return ProviderRegistry(
         providers=providers,
-        default_model=str(doc.get("default_model", "")),
+        default_model=default_model,
         default_provider=str(doc.get("default_provider", "")),
         source=source,
     )

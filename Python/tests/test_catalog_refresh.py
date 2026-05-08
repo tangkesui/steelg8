@@ -92,28 +92,28 @@ class CatalogRefreshTests(unittest.TestCase):
         self.assertIsNotNone(doc["providers"]["openrouter"]["fetched_at"])
 
     def test_refresh_kimi_falls_back_to_pricing_table(self) -> None:
-        # kimi 上游返回不带 pricing 字段，走 pricing.py 静态表
+        # kimi 上游返回不带 pricing 字段。polish-3 D 起：pricing.py 静态表
+        # （来源是官方文档的高置信价格）→ verified；表里没收录的才 fallback null。
         upstream = {
             "data": [
-                {"id": "kimi-k2-0905-preview"},     # 在 PRICING 表里
-                {"id": "totally-unknown-model"},     # 不在表里 → 走 PROVIDER_DEFAULT["kimi"]
+                {"id": "kimi-k2-0905-preview"},   # pricing.py 收录 → verified
+                {"id": "totally-unknown-model"},  # 未收录 → fallback
             ]
         }
         prov = _make_provider("https://api.moonshot.cn/v1")
         registry = _make_registry("kimi", prov)
 
-        with patch("network.request_json", return_value=upstream):
+        with patch("network.request_json", return_value=upstream), \
+             patch("services.pricing_scraper.scrape_pricing", return_value={}):
             response = self.provider_service.catalog_refresh(registry, "kimi")
 
         models = {m["id"]: m for m in response.payload["models"]}
-        # PRICING["kimi-k2-0905-preview"] = Price(0.56, 2.22)
         self.assertAlmostEqual(
             models["kimi-k2-0905-preview"]["pricing_per_mtoken"]["input"], 0.56
         )
-        # PROVIDER_DEFAULT["kimi"] = Price(1.67, 1.67)
-        self.assertAlmostEqual(
-            models["totally-unknown-model"]["pricing_per_mtoken"]["input"], 1.67
-        )
+        self.assertEqual(models["kimi-k2-0905-preview"]["pricing_source"], "verified")
+        self.assertIsNone(models["totally-unknown-model"]["pricing_per_mtoken"]["input"])
+        self.assertEqual(models["totally-unknown-model"]["pricing_source"], "fallback")
 
     def test_refresh_preserves_user_unselected_models(self) -> None:
         # 用户先把 model-a 标 unselected

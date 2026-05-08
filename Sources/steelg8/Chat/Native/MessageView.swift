@@ -24,6 +24,8 @@ struct MessageView: View {
     private var userBubble: some View {
         VStack(alignment: .trailing, spacing: 2) {
             Text(message.content)
+                .font(.system(size: SG.chatBody))
+                .lineSpacing(SG.chatLineSpacing)
                 .textSelection(.enabled)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
@@ -82,22 +84,22 @@ struct MessageView: View {
         HStack(spacing: 8) {
             if !meta.model.isEmpty {
                 Text(meta.model)
-                    .font(.system(size: 10.5))
+                    .font(.system(size: SG.chatMeta))
                     .foregroundStyle(.tertiary)
             }
             if meta.promptTokens > 0 || meta.completionTokens > 0 {
                 Text("↑\(meta.promptTokens) ↓\(meta.completionTokens)")
-                    .font(.system(size: 10.5).monospacedDigit())
+                    .font(.system(size: SG.chatMeta).monospacedDigit())
                     .foregroundStyle(.tertiary)
             }
             if meta.costUsd > 0 {
                 Text(String(format: "¥%.4f", meta.costUsd * 7.25))
-                    .font(.system(size: 10.5).monospacedDigit())
+                    .font(.system(size: SG.chatMeta).monospacedDigit())
                     .foregroundStyle(.tertiary)
             }
             if message.ragCount > 0 {
                 Text("RAG \(message.ragCount)")
-                    .font(.system(size: 10.5))
+                    .font(.system(size: SG.chatMeta))
                     .foregroundStyle(.tertiary)
             }
         }
@@ -130,19 +132,19 @@ private struct ToolCallRow: View {
                 ProgressView().scaleEffect(0.5).frame(width: 14, height: 14)
             } else if isError {
                 Image(systemName: "xmark.circle.fill")
-                    .font(.system(size: 11.5))
+                    .font(.system(size: SG.chatTool))
                     .foregroundStyle(SG.danger)
             } else {
                 Image(systemName: "checkmark.circle.fill")
-                    .font(.system(size: 11.5))
+                    .font(.system(size: SG.chatTool))
                     .foregroundStyle(SG.success(colorScheme))
             }
             Text(tc.name)
-                .font(.system(size: 11.5))
+                .font(.system(size: SG.chatTool))
                 .foregroundStyle(isError ? .primary : .secondary)
             if let detail = resultDetail {
                 Text("→ \(detail.prefix(80))")
-                    .font(.system(size: 11.5))
+                    .font(.system(size: SG.chatTool))
                     .foregroundStyle(.tertiary)
                     .lineLimit(1)
             }

@@ -218,6 +218,7 @@ def open_project(
     path: str,
     registry: ProviderRegistry,
     *,
+    name: str | None = None,
     rebuild: bool = True,
     embed_dims: int = 1024,
 ) -> vectordb.ProjectRow:
@@ -226,7 +227,7 @@ def open_project(
     if not Path(abs_path).is_dir():
         raise ValueError(f"不是一个目录：{abs_path}")
 
-    project_id = vectordb.upsert_project(abs_path, embed_dims=embed_dims)
+    project_id = vectordb.upsert_project(abs_path, name=name or None, embed_dims=embed_dims)
     project = vectordb.get_project(abs_path)
     assert project is not None
     set_active(project)
@@ -360,6 +361,10 @@ def remove(project_id: int) -> bool:
 def _run_index_job(project: vectordb.ProjectRow, registry: ProviderRegistry, job_id: int) -> None:
     try:
         store = rag_store.default_store()
+        # 索引 / 校验都用完整 fingerprint（provider|model|dimensions|endpoint_kind）
+        # 而不仅 model 名，避免换 provider 但 model 名相同时误用旧索引。
+        import rag_config
+        embed_fingerprint = rag_config.current().embedding_fingerprint()
 
         # 1) 遍历文件，并和 manifest 对比，删除已经不存在的文件索引。
         files = list(extract.walk_project(project.path))
@@ -400,7 +405,7 @@ def _run_index_job(project: vectordb.ProjectRow, registry: ProviderRegistry, job
                 continue
 
             content_hash = extract.file_hash(fref.abs_path)
-            if existing and existing.content_hash == content_hash and existing.embed_model == embedding.DEFAULT_MODEL:
+            if existing and existing.content_hash == content_hash and existing.embed_model == embed_fingerprint:
                 store.update_file_manifest(
                     project.id,
                     fref.rel_path,
@@ -409,7 +414,7 @@ def _run_index_job(project: vectordb.ProjectRow, registry: ProviderRegistry, job
                     content_hash=content_hash,
                     text_hash=existing.text_hash,
                     chunk_count=existing.chunk_count,
-                    embed_model=embedding.DEFAULT_MODEL,
+                    embed_model=embed_fingerprint,
                     parser_diagnostics=existing.parser_diagnostics or {},
                 )
                 indexed_files += 1
@@ -441,7 +446,7 @@ def _run_index_job(project: vectordb.ProjectRow, registry: ProviderRegistry, job
                     mtime=fref.mtime,
                     content_hash=content_hash,
                     text_hash=text_hash,
-                    embed_model=embedding.DEFAULT_MODEL,
+                    embed_model=embed_fingerprint,
                     parser_diagnostics=diagnostics,
                 )
                 indexed_files += 1
@@ -481,7 +486,7 @@ def _run_index_job(project: vectordb.ProjectRow, registry: ProviderRegistry, job
                 mtime=fref.mtime,
                 content_hash=content_hash,
                 text_hash=text_hash,
-                embed_model=embedding.DEFAULT_MODEL,
+                embed_model=embed_fingerprint,
                 parser_diagnostics=diagnostics,
             )
             indexed_files += 1
@@ -501,7 +506,7 @@ def _run_index_job(project: vectordb.ProjectRow, registry: ProviderRegistry, job
 
         # 3) 标记完成。chunk_count 从数据库实时统计，避免跳过文件时状态少算。
         final_chunks = store.count_chunks(project.id)
-        vectordb.mark_indexed(project.id, embed_model=embedding.DEFAULT_MODEL)
+        vectordb.mark_indexed(project.id, embed_model=embed_fingerprint)
         _update_status(
             job_id=job_id,
             state="done",
@@ -526,10 +531,11 @@ def _run_index_job(project: vectordb.ProjectRow, registry: ProviderRegistry, job
 def _manifest_is_fresh(record: vectordb.FileManifest | None, fref: extract.FileRef) -> bool:
     if record is None:
         return False
+    import rag_config
     return (
         record.size == fref.size
         and abs(record.mtime - fref.mtime) < 0.001
-        and record.embed_model == embedding.DEFAULT_MODEL
+        and record.embed_model == rag_config.current().embedding_fingerprint()
     )
 
 
@@ -634,15 +640,16 @@ def retrieve(
     ):
         skip_current = True
 
-    # 模型一致性校验
+    # 模型一致性校验：当前 rag_config fingerprint vs 索引时的 fingerprint
+    import rag_config
+    current_fp = rag_config.current().embedding_fingerprint()
     if active:
         proj = vectordb.get_project(active["path"])
-        if proj and proj.embed_model and proj.embed_model != embedding.DEFAULT_MODEL:
+        if proj and proj.embed_model and proj.embed_model != current_fp:
             import sys
             sys.stderr.write(
-                f"[steelg8] embedding model 不一致 · 索引时={proj.embed_model} "
-                f"· 当前={embedding.DEFAULT_MODEL}。该项目的 RAG 召回已停用，"
-                f"请重新索引。\n"
+                f"[steelg8] embedding fingerprint 不匹配 · 索引时={proj.embed_model} "
+                f"· 当前={current_fp}。该项目的 RAG 召回已停用，请重新索引。\n"
             )
             skip_current = True
 
@@ -734,9 +741,11 @@ def retrieve_debug(
         "knowledge": [],
     }
     skipped_current = False
+    import rag_config
+    current_fp = rag_config.current().embedding_fingerprint()
     if active and project_id:
         proj = vectordb.get_project(active["path"])
-        if proj and proj.embed_model and proj.embed_model != embedding.DEFAULT_MODEL:
+        if proj and proj.embed_model and proj.embed_model != current_fp:
             skipped_current = True
         elif _STATUS.state == "running" and _STATUS.project_id == project_id and _STATUS.embedded_chunks == 0:
             skipped_current = True
@@ -786,7 +795,8 @@ def retrieve_debug(
         "embedding": {
             "ok": q_vec is not None,
             "dims": len(q_vec or []),
-            "model": embedding.DEFAULT_MODEL,
+            "model": rag_config.current().embedding.model,
+            "fingerprint": rag_config.current().embedding_fingerprint(),
             "error": embedding_error,
         },
         "lanes": lanes,

@@ -63,7 +63,7 @@ struct MarkdownEditorPage: View {
                     .foregroundStyle(statusIsError ? .red : .secondary)
             }
             Spacer()
-            Button("还原") {
+            Button("默认") {
                 content = loadedSnapshot
                 statusMessage = nil
                 statusIsError = false

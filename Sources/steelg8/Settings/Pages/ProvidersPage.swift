@@ -81,7 +81,6 @@ struct ProvidersPage: View {
             ProviderDetailView(
                 entry: entry,
                 catalogModels: viewModel.catalogModels(for: entry.name),
-                selectedIDs: viewModel.selectedModelIDs(for: entry.name),
                 newModelText: viewModel.newModelTextBinding(for: entry.name),
                 isRefreshing: viewModel.refreshingProvider == entry.name,
                 isSaving: viewModel.isSaving,
@@ -90,17 +89,11 @@ struct ProvidersPage: View {
                 onSetField: { field, value in
                     viewModel.setProviderField(name: entry.name, field: field, value: value)
                 },
-                onToggleModel: { modelID, enabled in
-                    viewModel.setModelSelected(provider: entry.name, modelID: modelID, selected: enabled)
-                },
                 onAddManualModel: {
                     viewModel.addManualModel(provider: entry.name)
                 },
                 onRefreshCatalog: {
                     viewModel.refreshCatalog(provider: entry.name)
-                },
-                onApplyRecommended: {
-                    viewModel.applyRecommended(provider: entry.name)
                 },
                 onUseEnv: {
                     viewModel.useExternalEnv(provider: entry.name)
@@ -330,22 +323,6 @@ final class ProvidersViewModel: ObservableObject {
         }
     }
 
-    func applyRecommended(provider: String) {
-        let recommended = RecommendedModelsClient.forProvider(provider)
-        guard !recommended.isEmpty else {
-            statusMessage = "这个 provider 暂无推荐清单。"
-            statusIsError = false
-            return
-        }
-        var models = catalogByProvider[provider] ?? []
-        for modelID in recommended where !models.contains(where: { $0.id == modelID }) {
-            models.append(CatalogModel.manual(id: modelID, selected: true))
-        }
-        setCatalogModels(provider: provider, models: models)
-        setPendingSelection(provider: provider, ids: Set(recommended))
-        saveSelection(provider: provider, message: "已应用推荐清单。")
-    }
-
     func useExternalEnv(provider: String) {
         guard let preset = ProviderCatalog.preset(by: provider) else { return }
         setProviderField(name: provider, field: .apiKey, value: "")
@@ -372,13 +349,10 @@ final class ProvidersViewModel: ObservableObject {
             return
         }
 
+        // 供应商管理只保存 provider 元数据（base_url / API key / display name 等）。
+        // 模型勾选 / capability 都由模型管理页 / catalog refresh 路径独立处理。
         Task {
             do {
-                for entry in entriesForValidation where entry.kind != "tool" {
-                    let ids = Array(pendingSelection[entry.name] ?? [])
-                        .sorted()
-                    _ = try await api.updateCatalogSelection(provider: entry.name, modelIds: ids)
-                }
                 try await api.reloadProviders()
                 await MainActor.run {
                     self.statusMessage = validation.warnings.isEmpty
@@ -392,26 +366,6 @@ final class ProvidersViewModel: ObservableObject {
                     self.statusMessage = "已保存配置，但热加载失败：\(error.localizedDescription)"
                     self.statusIsError = true
                     self.isSaving = false
-                }
-            }
-        }
-    }
-
-    private func saveSelection(provider: String, message: String) {
-        Task {
-            do {
-                let ids = Array(pendingSelection[provider] ?? []).sorted()
-                let response = try await api.updateCatalogSelection(provider: provider, modelIds: ids)
-                await MainActor.run {
-                    self.setCatalogModels(provider: provider, models: response.models)
-                    self.setPendingSelection(provider: provider, ids: Set(response.models.filter(\.selected).map(\.id)))
-                    self.statusMessage = message
-                    self.statusIsError = false
-                }
-            } catch {
-                await MainActor.run {
-                    self.statusMessage = "写入 catalog 失败：\(error.localizedDescription)"
-                    self.statusIsError = true
                 }
             }
         }

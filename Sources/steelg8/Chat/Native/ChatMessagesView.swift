@@ -22,6 +22,7 @@ struct ChatMessagesView: View {
                 .padding(.horizontal, 48)
                 .padding(.vertical, 20)
             }
+            .scrollIndicators(.hidden)
             .background(SG.bg(colorScheme))
             .onChange(of: vm.messages.count) {
                 scrollToBottom(proxy)

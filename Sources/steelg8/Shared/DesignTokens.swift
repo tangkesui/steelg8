@@ -65,6 +65,13 @@ enum SG {
     static func pillBg(_ cs: ColorScheme) -> Color {
         cs == .dark ? Color.white.opacity(0.06) : Color.black.opacity(0.05)
     }
+    // 聊天区字号 / 行距（中文阅读优先：16pt 正文 + 6pt lineSpacing ≈ 26pt 行高）
+    static let chatBody: CGFloat = 15
+    static let chatMeta: CGFloat = 12
+    static let chatTool: CGFloat = 13
+    static let chatLineSpacing: CGFloat = 6
+    static let chatParagraphSpacing: CGFloat = 12
+
     static let sendBlue = Color(hex: "#4a8bff")
     static func success(_ cs: ColorScheme) -> Color {
         cs == .dark ? Color(hex: "#6bff9b") : Color(hex: "#1f8a5b")

@@ -4,6 +4,9 @@ import SwiftUI
 final class SteelG8AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
+        // 启动期就把外观偏好套上，避免一闪系统模式再切到用户选择
+        let prefs = AppPreferencesStore.shared.loadOrDefaults()
+        (AppAppearance(rawValue: prefs.appearance) ?? AppPreferencesStore.defaultAppearance).apply()
         AppController.shared.setup()
         DispatchQueue.main.async {
             AppController.shared.showMainWindow()

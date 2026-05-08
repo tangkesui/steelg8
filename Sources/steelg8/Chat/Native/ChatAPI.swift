@@ -7,6 +7,7 @@ struct ProjectItem: Identifiable, Decodable, Equatable {
     let name: String
     let path: String
     let active: Bool
+    let chunkCount: Int?
 }
 
 struct ProjectStatus: Decodable {
@@ -104,8 +105,9 @@ struct ChatAPI {
         let _: OkResponse = try await post("project/reindex", body: EmptyBody())
     }
 
-    func openProject(path: String) async throws {
-        let _: OkResponse = try await post("project/open", body: PathBody(path: path))
+    func openProject(path: String, name: String? = nil, rebuild: Bool = true) async throws {
+        struct Body: Encodable { let path: String; let name: String?; let rebuild: Bool }
+        let _: OkResponse = try await post("project/open", body: Body(path: path, name: name, rebuild: rebuild))
     }
 
     func closeProject() async throws {

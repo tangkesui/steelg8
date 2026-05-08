@@ -48,6 +48,10 @@ struct ComposerView: NSViewRepresentable {
 
     func updateNSView(_ nsView: NSScrollView, context: Context) {
         guard let tv = nsView.documentView as? NSTextView else { return }
+        // IME 输入中（marked text 状态，例如中文拼音预览）时，外部 SSE re-render
+        // 触发的 updateNSView 不能动 tv.string，否则会把进行中的 marked text 抹掉，
+        // 用户感受为"打字打到一半被打断"。
+        if tv.hasMarkedText() { return }
         if tv.string != text {
             tv.string = text
             context.coordinator.recalcHeight(tv)

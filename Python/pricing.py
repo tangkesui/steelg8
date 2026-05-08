@@ -13,8 +13,14 @@
 - 价格会变，表过期时手动改这里即可；不做运行时拉取（稳定、可审计）
 - OpenRouter 会在 response body 里带 `usage` 和有些模型带 `cost` 字段。
   本表作为兜底；若 response 里有 usage 金额，优先用 response 的
-- 没登记的 model → 回退到 provider 默认档（在 provider_default 里）
+- 没登记的 model → 返回 None（不再用 provider 平均档撒谎）。catalog 把 pricing 置 null，UI 显示"—"
 - `:free` 后缀的 OpenRouter 模型一律按 (0, 0) 处理
+
+历史：
+- 旧版本对未知 model 返 PROVIDER_DEFAULT[provider] 平均档，但这导致百炼整片错价
+  （bailian 全用 0.11/0.33 兜底）。2026-05-08 改成"未知就返 None"，由 catalog
+  refresh 把 pricing_source=fallback + null 写进 catalog；用户在「模型管理」页
+  可手填把 source 升到 verified。
 """
 
 from __future__ import annotations
@@ -97,27 +103,63 @@ PRICING: dict[str, Price] = {
     "qwen-max":       Price(0.33, 1.33),    # ¥2.4/M / ¥9.6/M
     "qwen3-max":      Price(0.33, 1.33),
     "qwen-long":      Price(0.069, 0.11),   # 长上下文特价
+
+    # ---- Qwen 3.5 / 3.6 系列（百炼，2026 上线，¥→USD@7.2）----
+    # 估价：旗舰按 max 档、中档按 plus 档、轻量按 turbo 档；带日期版本走 base id 同价
+    "qwen3.5-plus":            Price(0.14, 0.42),
+    "qwen3.6-max-preview":     Price(0.42, 1.67),
+    "qwen3.6-flash":           Price(0.06, 0.17),
+    "qwen3.6-27b":             Price(0.14, 0.42),
+    "qwen3.6-35b-a3b":         Price(0.21, 0.83),
+
+    # ---- Kimi 新版本 ----
+    "kimi-k2.6":               Price(0.83, 3.33),
+
+    # ---- DeepSeek v4（百炼代理 / 直连同价）----
+    "deepseek-v4-flash":  Price(0.069, 0.28),
+    "deepseek-v4-pro":    Price(0.28, 1.10),
+
+    # ---- Embedding / Rerank（input-only，output_per_1m=0；2026-01 训练数据时点）----
+    # 百炼 text-embedding-v1/v2/v3/v4：¥0.7/Mtok input ÷ 7.2 ≈ $0.097
+    "text-embedding-v1":  Price(0.097, 0.0),
+    "text-embedding-v2":  Price(0.097, 0.0),
+    "text-embedding-v3":  Price(0.097, 0.0),
+    "text-embedding-v4":  Price(0.097, 0.0),
+    # 百炼 rerank：¥0.8/Mtok ≈ $0.111
+    "gte-rerank":     Price(0.111, 0.0),
+    "gte-rerank-v2":  Price(0.111, 0.0),
+    "qwen3-rerank":   Price(0.111, 0.0),
+    # OpenAI embedding（platform.openai.com pricing）
+    "text-embedding-3-small": Price(0.02, 0.0),
+    "text-embedding-3-large": Price(0.13, 0.0),
+    "text-embedding-ada-002": Price(0.10, 0.0),
 }
 
-# provider 级兜底档（model 未命中时用）。
-# `bailian` 是 providers.example.json 里的 provider id（阿里百炼 OpenAI 兼容模式），
-# 与 `qwen` 共用同一档定价。两个 key 都保留是为了向后兼容历史调用。
-PROVIDER_DEFAULT: dict[str, Price] = {
-    "openrouter": Price(1.00, 3.00),   # 偏保守中档估价
-    "kimi":       Price(1.67, 1.67),
-    "deepseek":   Price(0.27, 1.10),
-    "qwen":       Price(0.11, 0.33),
-    "bailian":    Price(0.11, 0.33),
-}
+
+def _strip_date_suffix(model: str) -> str:
+    """去掉模型 id 末尾的 -YYYY-MM-DD 日期版本号，便于命中 base id。
+    例：'qwen3.5-plus-2026-04-20' → 'qwen3.5-plus'
+    """
+    parts = model.rsplit("-", 3)
+    if (
+        len(parts) == 4
+        and len(parts[1]) == 4 and parts[1].isdigit()
+        and len(parts[2]) == 2 and parts[2].isdigit()
+        and len(parts[3]) == 2 and parts[3].isdigit()
+    ):
+        return parts[0]
+    return model
 
 
-def lookup(model: str, provider: str = "") -> Price:
-    """按 model → provider 兜底的顺序查价。未命中返回 0 价（免费/未知）。
+def lookup(model: str, provider: str = "") -> Optional[Price]:  # noqa: UP007
+    """按 model → 去日期后缀 → 去 :tag 后缀 顺序查价。
+    没命中返回 None（不再用 provider 平均档撒谎）；调用方按 None 处理。
 
-    `:free` 后缀一律 0。
+    `:free` 后缀一律返 (0, 0)。
+    `provider` 形参保留以兼容旧调用，但**不再**用作兜底。
     """
     if not model:
-        return PROVIDER_DEFAULT.get(provider, Price(0.0, 0.0))
+        return None
 
     # OpenRouter 的 :free 系列
     if model.endswith(":free"):
@@ -127,14 +169,24 @@ def lookup(model: str, provider: str = "") -> Price:
     if model in PRICING:
         return PRICING[model]
 
-    # 有些 openrouter 会带版本后缀，比如 "anthropic/claude-sonnet-4.5:thinking"
-    # 剥离 ":xxx" 再试一次
+    # bailian 代理形态（catalog 里偶尔出现）：'kimi/kimi-k2.6' → 取斜杠后段试
+    if "/" in model:
+        tail = model.rsplit("/", 1)[1]
+        if tail in PRICING:
+            return PRICING[tail]
+
+    # 剥离 ":xxx" 再试（OpenRouter 偶有 ':thinking' 这种版本后缀）
     if ":" in model:
         base = model.rsplit(":", 1)[0]
         if base in PRICING:
             return PRICING[base]
 
-    return PROVIDER_DEFAULT.get(provider, Price(0.0, 0.0))
+    # 剥离日期版本号
+    base = _strip_date_suffix(model)
+    if base != model and base in PRICING:
+        return PRICING[base]
+
+    return None
 
 
 def cost_usd(
@@ -143,7 +195,11 @@ def cost_usd(
     prompt_tokens: int,
     completion_tokens: int,
 ) -> float:
-    return lookup(model, provider).cost(prompt_tokens, completion_tokens)
+    """计费路径。命中静态表用对应价；未命中按 0 计（不撒谎，宁可 underbill 也不 overbill）。"""
+    p = lookup(model, provider)
+    if p is None:
+        return 0.0
+    return p.cost(prompt_tokens, completion_tokens)
 
 
 # 简易 USD→CNY 常量（UI 显示双币种用，不做实时汇率）

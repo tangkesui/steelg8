@@ -115,6 +115,16 @@ ROUTES: tuple[http_routing.Route, ...] = (
     http_routing.Route("POST", "/providers/{provider_name}/catalog/refresh", "_post_provider_catalog_refresh"),
     http_routing.Route("GET", "/providers/{provider_name}/catalog", "_get_provider_catalog"),
     http_routing.Route("PUT", "/providers/{provider_name}/catalog/selection", "_put_provider_catalog_selection"),
+    http_routing.Route("PUT", "/providers/{provider_name}/catalog/pricing", "_put_provider_catalog_pricing"),
+    http_routing.Route("PUT", "/providers/registry/default-provider", "_put_default_provider"),
+    http_routing.Route("PUT", "/providers/registry/order", "_put_provider_order"),
+    http_routing.Route("GET", "/router/state", "_get_router_state"),
+    http_routing.Route("PUT", "/providers/{provider_name}/catalog/capability", "_put_provider_catalog_capability"),
+    http_routing.Route("POST", "/providers/resolve", "_post_providers_resolve"),
+    http_routing.Route("GET", "/rag/config", "_get_rag_config"),
+    http_routing.Route("PUT", "/rag/config", "_put_rag_config"),
+    http_routing.Route("POST", "/rag/test-embedding", "_post_rag_test_embedding"),
+    http_routing.Route("GET", "/rag/diagnostics", "_get_rag_diagnostics"),
     http_routing.Route("POST", "/chat", "_post_chat"),
     http_routing.Route("POST", "/chat/stream", "_post_chat_stream"),
     http_routing.Route("POST", "/scratch/note", "_post_scratch_note"),
@@ -299,6 +309,54 @@ class SteelG8Handler(BaseHTTPRequestHandler):
             provider_name,
             self.read_json(),
         )
+
+    def _put_provider_catalog_pricing(self, provider_name: str) -> None:
+        self._respond_service(
+            provider_service.update_catalog_pricing,
+            provider_name,
+            self.read_json(),
+        )
+
+    def _put_default_provider(self) -> None:
+        self._respond_service(
+            provider_service.update_default_provider, self.registry, self.read_json()
+        )
+
+    def _put_provider_order(self) -> None:
+        self._respond_service(
+            provider_service.update_provider_order, self.registry, self.read_json()
+        )
+
+    def _get_router_state(self) -> None:
+        self._respond_service(provider_service.router_state)
+
+    def _put_provider_catalog_capability(self, provider_name: str) -> None:
+        self._respond_service(
+            provider_service.update_catalog_capability,
+            provider_name,
+            self.read_json(),
+        )
+
+    def _post_providers_resolve(self) -> None:
+        self._respond_service(
+            provider_service.resolve_model, self.registry, self.read_json()
+        )
+
+    def _get_rag_config(self) -> None:
+        from services import rag_service
+        self._respond_service(rag_service.get_config, self.registry)
+
+    def _put_rag_config(self) -> None:
+        from services import rag_service
+        self._respond_service(rag_service.put_config, self.registry, self.read_json())
+
+    def _post_rag_test_embedding(self) -> None:
+        from services import rag_service
+        self._respond_service(rag_service.test_embedding, self.registry, self.read_json())
+
+    def _get_rag_diagnostics(self) -> None:
+        from services import rag_service
+        self._respond_service(rag_service.diagnostics)
 
     def _post_chat(self) -> None:
         self._handle_chat(stream=False)

@@ -1,0 +1,24 @@
+{
+  "$schema_note": "RAG 配置文件，目标位置 ~/.steelg8/rag.json，权限 0644。Settings → 模型 → RAG 管理 修改。",
+  "version": 1,
+  "embedding": {
+    "provider": "bailian",
+    "model": "text-embedding-v3",
+    "dimensions": 1024,
+    "endpoint_kind": "openai-compat"
+  },
+  "rerank": {
+    "provider": "bailian",
+    "model": "qwen3-rerank",
+    "endpoint_kind": "dashscope-native",
+    "endpoint_url_override": null
+  },
+  "strategy": {
+    "id": "default",
+    "params": {}
+  },
+  "backend": {
+    "id": "sqlite-brute-force",
+    "params": {}
+  }
+}

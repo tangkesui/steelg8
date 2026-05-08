@@ -33,7 +33,18 @@ enum KernelConfig {
     }
 
     static func url(path: String) -> URL {
-        baseURL.appending(path: path.trimmingCharacters(in: CharacterSet(charactersIn: "/")))
+        // 拆 path?query：appending(path:) 会把 ? 当成路径字符 percent-encode，
+        // 那样 kernel 看到的就是 /logs%3Flimit=...，路由表 miss 返回 404。
+        let trimmed = path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        let parts = trimmed.split(separator: "?", maxSplits: 1, omittingEmptySubsequences: false)
+        let pathOnly = String(parts[0])
+        let result = baseURL.appending(path: pathOnly)
+        if parts.count == 2 {
+            var components = URLComponents(url: result, resolvingAgainstBaseURL: false)!
+            components.percentEncodedQuery = String(parts[1])
+            return components.url!
+        }
+        return result
     }
 
     static func authorize(_ request: inout URLRequest) {

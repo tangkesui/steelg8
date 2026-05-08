@@ -188,11 +188,13 @@ def prepare_chat(
             + "如果用户只说 ping，请简短回复 pong。"
         )
 
-    rag_hits = (
-        []
-        if isolate_context
-        else project_mod.retrieve(req.message, registry, top_k=5)
-    )
+    if isolate_context:
+        rag_hits = []
+    else:
+        import rag_strategy
+        rag_hits = rag_strategy.default_strategy().retrieve(
+            req.message, registry, top_k=5
+        )
     if rag_hits:
         logger.info(
             "rag.retrieve",

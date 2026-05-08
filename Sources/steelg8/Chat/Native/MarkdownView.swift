@@ -180,7 +180,7 @@ enum InlineRenderer {
             if let r = findDelimited(in: remaining, open: "**", close: "**") {
                 result += AttributedString(remaining[..<r.before])
                 var bold = AttributedString(remaining[r.content])
-                bold.font = .boldSystemFont(ofSize: NSFont.systemFontSize)
+                bold.font = .boldSystemFont(ofSize: SG.chatBody)
                 result += bold
                 remaining = String(remaining[r.after...])
                 continue
@@ -191,7 +191,7 @@ enum InlineRenderer {
                 result += AttributedString(remaining[..<r.before])
                 var italic = AttributedString(remaining[r.content])
                 italic.font = NSFontManager.shared.convert(
-                    NSFont.systemFont(ofSize: NSFont.systemFontSize), toHaveTrait: .italicFontMask)
+                    NSFont.systemFont(ofSize: SG.chatBody), toHaveTrait: .italicFontMask)
                 result += italic
                 remaining = String(remaining[r.after...])
                 continue
@@ -209,7 +209,7 @@ enum InlineRenderer {
             if let r = findDelimited(in: remaining, open: "`", close: "`") {
                 result += AttributedString(remaining[..<r.before])
                 var code = AttributedString(remaining[r.content])
-                code.font = NSFont.monospacedSystemFont(ofSize: NSFont.systemFontSize - 1, weight: .regular)
+                code.font = NSFont.monospacedSystemFont(ofSize: SG.chatBody - 1, weight: .regular)
                 code.backgroundColor = NSColor.textBackgroundColor.withAlphaComponent(0.5)
                 result += code
                 remaining = String(remaining[r.after...])
@@ -302,11 +302,13 @@ struct MarkdownView: View {
         // 流式阶段用纯 Text（O(1)），避免每个 delta 触发解析和 AttributedString 构建
         if isStreaming || markdown.count > 12_000 {
             Text(markdown)
+                .font(.system(size: SG.chatBody))
+                .lineSpacing(SG.chatLineSpacing)
                 .textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
         } else {
             let parsedBlocks = MarkdownParser.parse(markdown)
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: SG.chatParagraphSpacing) {
                 ForEach(parsedBlocks.indices, id: \.self) { i in
                     blockView(parsedBlocks[i])
                 }
@@ -338,6 +340,8 @@ struct MarkdownView: View {
                 VStack(alignment: .leading, spacing: 4) {
                     ForEach(lines.indices, id: \.self) { i in
                         Text(InlineRenderer.attributedString(from: lines[i]))
+                            .font(.system(size: SG.chatBody))
+                            .lineSpacing(SG.chatLineSpacing)
                             .foregroundStyle(.secondary)
                     }
                 }
@@ -348,8 +352,12 @@ struct MarkdownView: View {
             VStack(alignment: .leading, spacing: 4) {
                 ForEach(items.indices, id: \.self) { i in
                     HStack(alignment: .firstTextBaseline, spacing: 6) {
-                        Text("•").foregroundStyle(.secondary)
+                        Text("•")
+                            .font(.system(size: SG.chatBody))
+                            .foregroundStyle(.secondary)
                         Text(InlineRenderer.attributedString(from: items[i]))
+                            .font(.system(size: SG.chatBody))
+                            .lineSpacing(SG.chatLineSpacing)
                     }
                 }
             }
@@ -359,10 +367,12 @@ struct MarkdownView: View {
                 ForEach(items.indices, id: \.self) { i in
                     HStack(alignment: .firstTextBaseline, spacing: 6) {
                         Text("\(items[i].0).")
-                            .font(.system(.body, design: .monospaced))
+                            .font(.system(size: SG.chatBody, design: .monospaced))
                             .foregroundStyle(.secondary)
                             .frame(minWidth: 20, alignment: .trailing)
                         Text(InlineRenderer.attributedString(from: items[i].1))
+                            .font(.system(size: SG.chatBody))
+                            .lineSpacing(SG.chatLineSpacing)
                     }
                 }
             }
@@ -372,6 +382,8 @@ struct MarkdownView: View {
 
         case .paragraph(let text):
             Text(InlineRenderer.attributedString(from: text))
+                .font(.system(size: SG.chatBody))
+                .lineSpacing(SG.chatLineSpacing)
                 .textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -424,7 +436,7 @@ struct CodeBlockView: View {
             // 代码内容
             ScrollView(.horizontal, showsIndicators: false) {
                 Text(AttributedString(highlightedCode()))
-                    .font(.system(size: 13, design: .monospaced))
+                    .font(.system(size: SG.chatBody - 1, design: .monospaced))
                     .textSelection(.enabled)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 10)
@@ -458,7 +470,7 @@ enum SyntaxHighlighter {
     static func highlight(code: String, language: String, isDark: Bool = true) -> NSAttributedString {
         let result = NSMutableAttributedString(string: code)
         let fullRange = NSRange(code.startIndex..., in: code)
-        result.addAttribute(.font, value: NSFont.monospacedSystemFont(ofSize: 13, weight: .regular), range: fullRange)
+        result.addAttribute(.font, value: NSFont.monospacedSystemFont(ofSize: SG.chatBody - 1, weight: .regular), range: fullRange)
 
         // 注释（必须最先处理，避免注释内容被其他规则染色）
         applyColor(to: result, code: code, pattern: #"(//[^\n]*|#[^\n]*|/\*[\s\S]*?\*/)"#,

@@ -1,8 +1,10 @@
+import AppKit
 import Foundation
 
 struct AppPreferences {
     var compressionTriggerRatio: Double
     var logLevel: String
+    var appearance: String
 }
 
 enum AppLogLevel: String, CaseIterable, Identifiable {
@@ -20,6 +22,36 @@ enum AppLogLevel: String, CaseIterable, Identifiable {
         case .warn: return "Warn（只看警告以上）"
         case .error: return "Error（只看错误）"
         }
+    }
+}
+
+enum AppAppearance: String, CaseIterable, Identifiable {
+    case auto
+    case light
+    case dark
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .auto: return "跟随系统"
+        case .light: return "浅色"
+        case .dark: return "深色"
+        }
+    }
+
+    /// nil 表示跟随系统（不强制覆盖 NSApp.appearance）
+    var nsAppearance: NSAppearance? {
+        switch self {
+        case .auto: return nil
+        case .light: return NSAppearance(named: .aqua)
+        case .dark: return NSAppearance(named: .darkAqua)
+        }
+    }
+
+    @MainActor
+    func apply() {
+        NSApp.appearance = nsAppearance
     }
 }
 
@@ -45,6 +77,7 @@ final class AppPreferencesStore {
     static let shared = AppPreferencesStore()
     static let defaultCompressionTriggerRatio = 0.60
     static let defaultLogLevel = AppLogLevel.info
+    static let defaultAppearance = AppAppearance.auto
 
     private let fileManager = FileManager.default
 
@@ -55,7 +88,8 @@ final class AppPreferencesStore {
     func loadOrDefaults() -> AppPreferences {
         (try? load()) ?? AppPreferences(
             compressionTriggerRatio: Self.defaultCompressionTriggerRatio,
-            logLevel: Self.defaultLogLevel.rawValue
+            logLevel: Self.defaultLogLevel.rawValue,
+            appearance: Self.defaultAppearance.rawValue
         )
     }
 
@@ -65,19 +99,26 @@ final class AppPreferencesStore {
             compressionTriggerRatio: normalizedCompressionRatio(
                 raw["compression_trigger_ratio"]
             ),
-            logLevel: normalizedLogLevel(raw["log_level"])
+            logLevel: normalizedLogLevel(raw["log_level"]),
+            appearance: normalizedAppearance(raw["appearance"])
         )
     }
 
     @discardableResult
-    func save(compressionTriggerRatio: Double, logLevel: String) throws -> AppPreferences {
+    func save(
+        compressionTriggerRatio: Double,
+        logLevel: String,
+        appearance: String
+    ) throws -> AppPreferences {
         try ensureDirectoryExists()
 
         var raw = try loadRaw()
         let normalizedRatio = normalizedCompressionRatio(compressionTriggerRatio)
         let normalizedLevel = normalizedLogLevel(logLevel)
+        let normalizedAppearanceValue = normalizedAppearance(appearance)
         raw["compression_trigger_ratio"] = normalizedRatio
         raw["log_level"] = normalizedLevel
+        raw["appearance"] = normalizedAppearanceValue
 
         let data: Data
         do {
@@ -102,7 +143,8 @@ final class AppPreferencesStore {
 
         return AppPreferences(
             compressionTriggerRatio: normalizedRatio,
-            logLevel: normalizedLevel
+            logLevel: normalizedLevel,
+            appearance: normalizedAppearanceValue
         )
     }
 
@@ -146,6 +188,15 @@ final class AppPreferencesStore {
             if valid.contains(trimmed) { return trimmed }
         }
         return Self.defaultLogLevel.rawValue
+    }
+
+    private func normalizedAppearance(_ value: Any?) -> String {
+        let valid = AppAppearance.allCases.map(\.rawValue)
+        if let raw = value as? String {
+            let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            if valid.contains(trimmed) { return trimmed }
+        }
+        return Self.defaultAppearance.rawValue
     }
 
     private func normalizedCompressionRatio(_ value: Any?) -> Double {

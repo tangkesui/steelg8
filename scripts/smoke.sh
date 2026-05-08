@@ -61,6 +61,7 @@ export STEELG8_USAGE_PATH="${TEST_STATE_DIR}/usage.jsonl"
 export STEELG8_PROVIDERS_PATH="${TEST_STATE_DIR}/providers.json"
 export STEELG8_SECRETS_PATH="${TEST_STATE_DIR}/secrets.json"
 export STEELG8_CATALOG_PATH="${TEST_STATE_DIR}/model_catalog.json"
+export STEELG8_RAG_CONFIG_PATH="${TEST_STATE_DIR}/rag.json"
 
 step "Python compileall"
 python3 -m compileall -q Python
@@ -68,13 +69,11 @@ python3 -m compileall -q Python
 step "Python unit tests"
 PYTHONPATH=Python python3 -m unittest discover -s Python/tests -v
 
-if command -v node >/dev/null 2>&1; then
+if [[ -d Web/chat ]] && command -v node >/dev/null 2>&1; then
   step "Web JavaScript syntax"
   while IFS= read -r js_file; do
     node --check "$js_file"
   done < <(find Web/chat -maxdepth 1 -type f -name '*.js' | sort)
-else
-  printf 'skip Web JavaScript syntax: node not found\n'
 fi
 
 if [[ "$RUN_SWIFT" == "1" ]]; then

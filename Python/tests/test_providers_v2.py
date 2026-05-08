@@ -187,12 +187,56 @@ class ProvidersV2Tests(unittest.TestCase):
         summary = reg.readiness_summary()
         ds_row = next(r for r in summary if r["name"] == "deepseek")
         self.assertEqual(ds_row["selected_models"], ["deepseek-chat"])
-        self.assertEqual(
-            ds_row["pricing"]["deepseek-chat"],
-            {"input": 0.14, "output": 0.28},
-        )
+        # 新 schema：pricing dict 多 source 字段
+        self.assertEqual(ds_row["pricing"]["deepseek-chat"]["input"], 0.14)
+        self.assertEqual(ds_row["pricing"]["deepseek-chat"]["output"], 0.28)
+        self.assertEqual(ds_row["pricing"]["deepseek-chat"]["source"], "fallback")
+        # 新增：all_models / created_at 都在响应里
+        self.assertIn("deepseek-chat", ds_row["all_models"])
+        self.assertIn("deepseek-chat", ds_row["created_at"])
         self.assertEqual(ds_row["displayName"], "DeepSeek")
         self.assertEqual(ds_row["kind"], "openai-compatible")
+
+    def test_visible_vs_all_models_split(self) -> None:
+        """selected:false 的模型应进 all_models 不进 models（topbar 可见）。"""
+        # 修改 catalog：deepseek-reasoner 不存在我加一条 selected=False
+        catalog_path = self.tmp / "model_catalog.json"
+        doc = json.loads(catalog_path.read_text(encoding="utf-8"))
+        doc["providers"]["kimi"]["models"].append({
+            "id": "kimi-archived",
+            "selected": False,
+            "pricing_per_mtoken": {"input": None, "output": None},
+        })
+        catalog_path.write_text(json.dumps(doc), encoding="utf-8")
+
+        providers = _reload_providers(self.tmp)
+        reg = providers.load_registry()
+        kimi = reg.providers["kimi"]
+        self.assertNotIn("kimi-archived", kimi.models)         # visible 集不包含
+        self.assertIn("kimi-archived", kimi.all_models)         # 全量集包含
+
+    def test_orphan_default_model_auto_added_when_catalog_unselected(self) -> None:
+        """providers.json 的 default_model 在 catalog 里 selected:false 时（孤儿状态），
+        registry 应自动把它注入对应 provider.models，避免 /providers 返回空列表导致
+        UI 显示「选择模型」。"""
+        # 把 catalog 中 deepseek-chat 改成 selected:false（其它一切不变）
+        catalog_path = self.tmp / "model_catalog.json"
+        doc = json.loads(catalog_path.read_text(encoding="utf-8"))
+        for m in doc["providers"]["deepseek"]["models"]:
+            if m["id"] == "deepseek-chat":
+                m["selected"] = False
+        catalog_path.write_text(json.dumps(doc), encoding="utf-8")
+
+        providers = _reload_providers(self.tmp)
+        reg = providers.load_registry()
+        # 兜底逻辑应把 deepseek-chat 加回去
+        self.assertIn("deepseek-chat", reg.providers["deepseek"].models)
+        # default_model 仍解析得到 (provider, model)
+        resolved = reg.resolve(None)
+        self.assertIsNotNone(resolved)
+        provider, model = resolved
+        self.assertEqual(provider.name, "deepseek")
+        self.assertEqual(model, "deepseek-chat")
 
     def test_resolve_prefers_default_provider_for_duplicate_model_id(self) -> None:
         providers = self.providers

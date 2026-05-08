@@ -222,11 +222,24 @@ def register_backend(name: str, factory: Callable[[], RagStore]) -> None:
 _DEFAULT_STORE: RagStore | None = None
 
 
+def _resolve_backend_name() -> str:
+    """优先级：env override > rag.json > default。
+    env 仍可覆盖（用于诊断 / 测试）。"""
+    env = (os.environ.get("STEELG8_RAG_BACKEND") or "").strip()
+    if env:
+        return env
+    try:
+        import rag_config
+        return rag_config.current().backend.id or "sqlite-brute-force"
+    except Exception:  # noqa: BLE001
+        return "sqlite-brute-force"
+
+
 def default_store() -> RagStore:
-    """返回当前激活的 backend。第一次调用按 `STEELG8_RAG_BACKEND` 选；缓存到下一次进程。"""
+    """返回当前激活的 backend。缓存到 reset 调用之前。"""
     global _DEFAULT_STORE
     if _DEFAULT_STORE is None:
-        backend_name = (os.environ.get("STEELG8_RAG_BACKEND") or "sqlite-brute-force").strip()
+        backend_name = _resolve_backend_name()
         factory = _BACKENDS.get(backend_name)
         if factory is None:
             # 未注册的 backend 名 → 回退到 SQLite，避免 chat 链路因配置错误整链中断
@@ -236,6 +249,11 @@ def default_store() -> RagStore:
 
 
 def reset_default_store() -> None:
-    """测试用：清掉缓存，下次 default_store() 重新按环境变量选 backend。"""
+    """测试用 / RAG 配置改后用：清掉缓存，下次 default_store() 重新按 rag_config 选。"""
     global _DEFAULT_STORE
     _DEFAULT_STORE = None
+
+
+def list_backends() -> list[str]:
+    """返已注册的 backend 名清单（给 RAG 管理页 picker 用）。"""
+    return sorted(_BACKENDS.keys())

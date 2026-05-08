@@ -1,5 +1,10 @@
 import Foundation
 
+extension Notification.Name {
+    /// providers.json 落盘后广播；主聊天窗口监听此事件刷新模型列表/默认模型。
+    static let providerConfigDidChange = Notification.Name("steelg8.providerConfigDidChange")
+}
+
 /// 对应 ~/.steelg8/providers.json 的一条 provider 配置。
 /// 与 Python 端 `providers.py` 的 JSON schema 对齐：
 /// - api_key 为空时，Python 端会回退去读 api_key_env
@@ -296,6 +301,9 @@ final class ProviderConfigStore {
             [.posixPermissions: NSNumber(value: Int16(0o644))],
             ofItemAtPath: configFileURL.path
         )
+
+        // 通知主窗口刷新（默认模型 / 可选模型列表）
+        NotificationCenter.default.post(name: .providerConfigDidChange, object: nil)
     }
 
     /// 只覆盖 entries，preserve 现有 default_model；用于"供应商与模型"页（不再持有默认模型）。
